@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1419">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="電池Plus">
+<title>電池健康度 Plus</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<style>
+:root{
+  --bg:#f3f4f6;--card:#ffffff;--text:#111827;--muted:#6b7280;--line:#e5e7eb;
+  --accent:#0f766e;--good:#15803d;--warn:#b45309;--bad:#b91c1c;--chip:#eef2f7;
+  --bar1:#0f766e;--bar2:#2563eb;--bar3:#7c3aed;--bar4:#9ca3af;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#0f1419;--card:#182029;--text:#e5e7eb;--muted:#9aa4b2;--line:#2a3441;
+    --accent:#2dd4bf;--good:#4ade80;--warn:#fbbf24;--bad:#f87171;--chip:#222c38;
+    --bar1:#2dd4bf;--bar2:#60a5fa;--bar3:#a78bfa;--bar4:#6b7280;}
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);
+  font:16px/1.5 -apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC",sans-serif;-webkit-text-size-adjust:100%}
+main{max-width:760px;margin:0 auto;padding:16px 16px calc(32px + env(safe-area-inset-bottom))}
+header h1{font-size:22px;margin:8px 0 4px}
+header p{margin:0 0 12px;color:var(--muted);font-size:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin:12px 0}
+.card h2{font-size:17px;margin:0 0 10px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+label{font-size:14px;color:var(--muted)}
+select,input[type=number]{font:inherit;padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text);min-height:44px}
+select{flex:1 1 240px;min-width:0}
+input[type=number]{width:120px}
+.btn{font:inherit;font-weight:600;padding:10px 16px;min-height:44px;border-radius:12px;border:1px solid var(--line);background:var(--chip);color:var(--text);cursor:pointer}
+.btn.primary{background:var(--accent);color:#fff;border-color:transparent}
+@media (prefers-color-scheme:dark){.btn.primary{color:#062a26}}
+.btn.small{padding:6px 12px;min-height:36px;font-size:14px}
+.file-btn{position:relative;overflow:hidden;display:inline-flex;align-items:center}
+.file-btn input{position:absolute;inset:0;opacity:0;cursor:pointer}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+@media (min-width:560px){.grid.g4{grid-template-columns:repeat(4,minmax(0,1fr))}}
+.stat{background:var(--chip);border-radius:12px;padding:10px}
+.stat .k{font-size:13px;color:var(--muted)}
+.stat .v{font-size:24px;font-weight:700;font-variant-numeric:tabular-nums}
+.stat .s{font-size:12px;color:var(--muted)}
+table{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:tabular-nums}
+th,td{text-align:left;padding:7px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+td.n{text-align:right;white-space:nowrap}
+td.n.wrap{white-space:normal;max-width:55%;word-break:break-all}
+td .muted{font-size:12px;margin-top:2px}
+th{color:var(--muted);font-weight:600}
+.tag{display:inline-block;font-size:11px;padding:1px 6px;border-radius:999px;margin-left:4px;vertical-align:1px}
+.tag.guess{background:#fef3c7;color:#92400e}
+.tag.unknown{background:#e5e7eb;color:#374151}
+@media (prefers-color-scheme:dark){.tag.guess{background:#3b2f0b;color:#fcd34d}.tag.unknown{background:#2a3441;color:#cbd5e1}}
+details{border-top:1px solid var(--line);padding-top:8px;margin-top:8px}
+summary{cursor:pointer;font-weight:600;min-height:32px}
+.muted{color:var(--muted);font-size:13px}
+.msg{padding:10px 12px;border-radius:10px;margin:8px 0;font-size:14px}
+.msg.err{background:#fee2e2;color:#7f1d1d}
+.msg.warn{background:#fef3c7;color:#78350f}
+.msg.ok{background:#dcfce7;color:#14532d}
+@media (prefers-color-scheme:dark){.msg.err{background:#3f1515;color:#fecaca}.msg.warn{background:#3b2f0b;color:#fde68a}.msg.ok{background:#0f2e1a;color:#bbf7d0}}
+.bars .bar{display:grid;grid-template-columns:110px 1fr 76px;gap:8px;align-items:center;margin:6px 0;font-size:14px}
+.bars .track{height:14px;background:var(--chip);border-radius:7px;overflow:hidden}
+.bars .fill{height:100%;border-radius:7px}
+svg{display:block;width:100%;height:auto}
+.chart-axis{stroke:var(--line)}
+.chart-text{fill:var(--muted);font-size:11px}
+.hidden{display:none}
+.scroll{overflow-x:auto}
+footer{color:var(--muted);font-size:12px;text-align:center;margin-top:20px}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>電池健康度 Plus</h1>
+    <p>讀取 iPhone「分析資料」檔，顯示比「設定」更詳細的電池數據。檔案只在這支手機上解析，不會上傳。</p>
+  </header>
+
+  <section class="card" id="setup">
+    <h2>1. 選擇型號</h2>
+    <div class="row">
+      <select id="model" aria-label="型號"></select>
+      <input id="customDesign" type="number" inputmode="numeric" min="500" max="10000" placeholder="mAh" class="hidden" aria-label="自訂設計容量">
+    </div>
+    <p class="muted" id="modelSource"></p>
+    <h2 style="margin-top:14px">2. 選擇分析資料檔</h2>
+    <div class="row">
+      <span class="btn primary file-btn">選擇檔案（可多選）<input id="file" type="file" multiple></span>
+    </div>
+    <details>
+      <summary>怎麼取得分析資料檔？</summary>
+      <ol class="muted">
+        <li>設定 → 隱私權與安全性 → 分析與改進功能 → 開啟「分享 iPhone 分析」（第一次開要等約一天）。</li>
+        <li>同一頁點「分析資料」，搜尋 <b>Analytics-</b>，點最新一份 <code>Analytics-年-月-日-…</code>。</li>
+        <li>右上角分享 → 儲存到檔案。</li>
+        <li>回到這裡按「選擇檔案」。一次選多天的檔案，就能直接看到趨勢。</li>
+      </ol>
+    </details>
+    <div id="messages"></div>
+  </section>
+
+  <div id="report" class="hidden">
+    <section class="card">
+      <h2>健康度</h2>
+      <div class="grid g4" id="healthStats"></div>
+      <p class="muted" id="healthNote"></p>
+      <div class="bars" id="capBars"></div>
+    </section>
+
+    <section class="card">
+      <h2>循環與使用年資</h2>
+      <div class="grid g4" id="cycleStats"></div>
+    </section>
+
+    <section class="card">
+      <h2>容量明細（mAh）</h2>
+      <div class="scroll"><table id="capTable"></table></div>
+    </section>
+
+    <section class="card">
+      <h2>溫度</h2>
+      <div class="grid g4" id="tempStats"></div>
+      <p class="muted">最高、最低溫度的原始值推定單位為 0.1 °C（例如 504 → 50.4 °C），平均溫度原始值推定已是 °C。</p>
+    </section>
+
+    <section class="card">
+      <h2>電壓與電流</h2>
+      <div class="grid g4" id="elecStats"></div>
+    </section>
+
+    <section class="card">
+      <h2>當天使用時間</h2>
+      <p class="muted" id="usageNote"></p>
+      <div class="bars" id="usageBars"></div>
+      <div class="scroll"><table id="usageTable"></table></div>
+    </section>
+
+    <section class="card">
+      <h2>充電習慣</h2>
+      <div class="grid g4" id="chargeStats"></div>
+      <div class="scroll"><table id="chargeTable"></table></div>
+    </section>
+
+    <section class="card">
+      <h2>內阻表（Ra）</h2>
+      <p class="muted">電池老化時內阻通常會上升，適合跟以後的紀錄比較。數值為原始值，單位未知。</p>
+      <div id="raChart"></div>
+    </section>
+
+    <section class="card">
+      <h2>電池狀態</h2>
+      <div class="scroll"><table id="statusTable"></table></div>
+    </section>
+
+    <section class="card">
+      <h2>全部原始欄位</h2>
+      <details>
+        <summary>展開（<span id="rawCount">0</span> 項）</summary>
+        <div class="scroll"><table id="rawTable"></table></div>
+      </details>
+    </section>
+  </div>
+
+  <section class="card" id="historyCard">
+    <h2>歷史與比較</h2>
+    <p class="muted">每讀一份檔案會在這支手機存一筆精簡紀錄（不含任何識別資料）。同一份檔案重讀不會重複。</p>
+    <div class="row">
+      <select id="metric" aria-label="趨勢項目"></select>
+    </div>
+    <div id="trend"></div>
+    <div class="row" style="margin-top:8px">
+      <label for="cmpA">比較</label>
+      <select id="cmpA" aria-label="比較 A"></select>
+      <select id="cmpB" aria-label="比較 B"></select>
+    </div>
+    <div class="scroll"><table id="cmpTable"></table></div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn small" id="exportBtn" type="button">匯出紀錄</button>
+      <span class="btn small file-btn">匯入紀錄<input id="importFile" type="file" accept=".json,application/json"></span>
+      <button class="btn small" id="clearBtn" type="button">清除全部紀錄</button>
+    </div>
+    <div id="historyMsg"></div>
+  </section>
+
+  <footer>電池健康度 Plus 網頁版 <span id="ver"></span>｜資料來源：iPhone 分析資料檔｜非 Apple 官方工具</footer>
+</main>
+<script src="parser.js"></script>
+<script src="models.js"></script>
+<script src="fields.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
