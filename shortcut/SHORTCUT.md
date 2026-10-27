@@ -50,7 +50,7 @@
 【規則 B】移除可能的識別碼欄位：
 
 ```
-"(?:deviceId|incident_id|crashReporterKey|uuid|serialNumber|SerialNumber)"\s*:\s*"[^"]*"\s*,?
+,\s*"(?:deviceId|incident_id|crashReporterKey|uuid|serialNumber|SerialNumber)"\s*:\s*"[^"]*"|"(?:deviceId|incident_id|crashReporterKey|uuid|serialNumber|SerialNumber)"\s*:\s*"[^"]*"\s*,?
 ```
 
 ## 三、累積紀錄

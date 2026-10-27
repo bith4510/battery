@@ -1,1 +1,1 @@
-"(?:deviceId|incident_id|crashReporterKey|uuid|serialNumber|SerialNumber)"\s*:\s*"[^"]*"\s*,?
+,\s*"(?:deviceId|incident_id|crashReporterKey|uuid|serialNumber|SerialNumber)"\s*:\s*"[^"]*"|"(?:deviceId|incident_id|crashReporterKey|uuid|serialNumber|SerialNumber)"\s*:\s*"[^"]*"\s*,?

@@ -1,7 +1,7 @@
 /* 電池健康度 Plus 網頁版 — 畫面邏輯 */
 (function () {
   'use strict';
-  const APP_VERSION = '1.2.1';
+  const APP_VERSION = '1.3';
   const P = window.BatteryParser, M = window.BatteryModels, FD = window.BatteryFields;
   const LS_MODEL = 'bhp_model_v1', LS_CUSTOM = 'bhp_custom_design_v1', LS_HISTORY = 'bhp_history_v1';
   const $ = (id) => document.getElementById(id);
@@ -10,8 +10,21 @@
   // ---------- 本機儲存（Safari 私密瀏覽等情況可能丟例外，一律包起來）----------
   function lsGet(k, def) { try { const v = localStorage.getItem(k); return v === null ? def : v; } catch (e) { return def; } }
   function lsSet(k, v) { try { localStorage.setItem(k, v); return true; } catch (e) { return false; } }
-  function loadHistory() { try { const a = JSON.parse(lsGet(LS_HISTORY, '[]')); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
-  function saveHistory(h) { return lsSet(LS_HISTORY, JSON.stringify(h)); }
+  // 電腦版（PyQt 視窗）會在頁面載入前放入 window.BHP_HOST：歷史以電腦上的 JSON 檔為主，瀏覽器儲存只是附帶
+  const HOST = (typeof window !== 'undefined' && window.BHP_HOST) ? window.BHP_HOST : null;
+  let hostHistory = (HOST && Array.isArray(HOST.initialHistory)) ? HOST.initialHistory.slice() : null;
+  function loadHistory() {
+    if (hostHistory) return hostHistory.slice();
+    try { const a = JSON.parse(lsGet(LS_HISTORY, '[]')); return Array.isArray(a) ? a : []; } catch (e) { return []; }
+  }
+  function saveHistory(h) {
+    if (HOST && typeof HOST.saveHistory === 'function') {
+      hostHistory = h.slice();
+      lsSet(LS_HISTORY, JSON.stringify(h));
+      try { HOST.saveHistory(JSON.stringify(h)); return true; } catch (e) { return false; }
+    }
+    return lsSet(LS_HISTORY, JSON.stringify(h));
+  }
 
   // ---------- 格式化 ----------
   function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
@@ -89,14 +102,15 @@
   }
   // 共用的讀入流程：檔案選取、捷徑傳入、剪貼簿、封存檔重新匯入都走這裡
   // items：[{ name, text }]；回傳成功筆數
-  function ingest(items, box) {
+  function ingest(items, box, results) {
     let history = loadHistory(), latest = null, okCount = 0;
+    const report = (name, ok, error) => { if (results) results.push({ name, ok, error: error || '' }); };
     for (const it of items) {
-      if (it.text === null) { msg(box, 'err', `${it.name}：讀取失敗`); continue; }
+      if (it.text === null) { msg(box, 'err', `${it.name}：讀取失敗`); report(it.name, false, '讀取失敗'); continue; }
       const parsed = P.parse(it.text);
       parsed.warnings.forEach(w => msg(box, 'warn', `${it.name}：${w}`));
-      if (!parsed.ok) { msg(box, 'err', `${it.name}：${parsed.error}`); msg(box, 'warn', '診斷（不含個人資料）：' + diagnose(it.text)); continue; }
-      okCount++;
+      if (!parsed.ok) { msg(box, 'err', `${it.name}：${parsed.error}`); msg(box, 'warn', '診斷（不含個人資料）：' + diagnose(it.text)); report(it.name, false, parsed.error); continue; }
+      okCount++; report(it.name, true, '');
       history = P.mergeHistory(history, P.snapshot(parsed, designCapacity()));
       // 用時間戳數值比較；沒有時間的檔案排最舊（v1.0 用字串比較，會把星期名稱拿來比，選錯檔）
       const tNew = parsed.meta.fileTime ? parsed.meta.fileTime.getTime() : -Infinity;
@@ -325,7 +339,7 @@
     $('importFile').addEventListener('change', (e) => importHistory(Array.from(e.target.files || [])));
     $('pasteBtn').addEventListener('click', pasteFromClipboard);
     $('clearBtn').addEventListener('click', () => {
-      if (!confirm('確定清除這支手機上的全部歷史紀錄？建議先匯出備份。')) return;
+      if (!confirm('確定清除這台裝置上的全部歷史紀錄？建議先匯出備份。')) return;
       saveHistory([]); renderHistory([]);
     });
   }
@@ -489,5 +503,10 @@
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
     navigator.serviceWorker.register('sw.js').catch(() => {});
   }
-  window.__bhp = { render: (t) => { const p = P.parse(t); if (p.ok) { current = p; render(p); } return p; }, buildCsv, decodeShortcutPayload }; // 測試用
+  window.__bhp = {
+    render: (t) => { const p = P.parse(t); if (p.ok) { current = p; render(p); } return p; }, buildCsv, decodeShortcutPayload, // 測試用
+    // 電腦版用：一次送入多份文字，回傳每份結果 [{ name, ok, error }]
+    ingestTexts: (items) => { const box = $('messages'); box.innerHTML = ''; const results = []; ingest(items.map(x => ({ name: String(x.name), text: x.text === null ? null : String(x.text) })), box, results); return results; },
+    historyCount: () => loadHistory().length,
+  };
 })();
