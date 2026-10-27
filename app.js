@@ -1,7 +1,7 @@
 /* 電池健康度 Plus 網頁版 — 畫面邏輯 */
 (function () {
   'use strict';
-  const APP_VERSION = '1.2';
+  const APP_VERSION = '1.2.1';
   const P = window.BatteryParser, M = window.BatteryModels, FD = window.BatteryFields;
   const LS_MODEL = 'bhp_model_v1', LS_CUSTOM = 'bhp_custom_design_v1', LS_HISTORY = 'bhp_history_v1';
   const $ = (id) => document.getElementById(id);
@@ -76,6 +76,17 @@
       r.readAsText(f);
     });
   }
+  // 讀取失敗時的診斷：只列字數、行數、檔頭與紀錄名稱，不列任何數值或識別碼
+  function diagnose(text) {
+    const t = String(text || '');
+    const lines = t.split(/\r?\n/).filter(l => l.trim());
+    const first = (lines[0] || '').slice(0, 40).replace(/[^\x20-\x7e]/g, '?');
+    const names = new Set(); const re = /"name"\s*:\s*"([A-Za-z0-9_]{1,80})"/g; let m;
+    while ((m = re.exec(t)) && names.size < 2000) names.add(m[1]);
+    const bat = [...names].filter(n => /battery/i.test(n));
+    return `${t.length.toLocaleString()} 字元、${lines.length} 行；第一行開頭「${first}」；紀錄名稱 ${names.size} 種，含 Battery 的 ${bat.length} 種` +
+      (bat.length ? `：${bat.slice(0, 12).join('、')}` : '') + '。';
+  }
   // 共用的讀入流程：檔案選取、捷徑傳入、剪貼簿、封存檔重新匯入都走這裡
   // items：[{ name, text }]；回傳成功筆數
   function ingest(items, box) {
@@ -84,7 +95,7 @@
       if (it.text === null) { msg(box, 'err', `${it.name}：讀取失敗`); continue; }
       const parsed = P.parse(it.text);
       parsed.warnings.forEach(w => msg(box, 'warn', `${it.name}：${w}`));
-      if (!parsed.ok) { msg(box, 'err', `${it.name}：${parsed.error}`); continue; }
+      if (!parsed.ok) { msg(box, 'err', `${it.name}：${parsed.error}`); msg(box, 'warn', '診斷（不含個人資料）：' + diagnose(it.text)); continue; }
       okCount++;
       history = P.mergeHistory(history, P.snapshot(parsed, designCapacity()));
       // 用時間戳數值比較；沒有時間的檔案排最舊（v1.0 用字串比較，會把星期名稱拿來比，選錯檔）
