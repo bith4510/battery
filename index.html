@@ -88,10 +88,13 @@ footer{color:var(--muted);font-size:12px;text-align:center;margin-top:20px}
       <select id="model" aria-label="型號"></select>
       <input id="customDesign" type="number" inputmode="numeric" min="500" max="10000" placeholder="mAh" class="hidden" aria-label="自訂設計容量">
     </div>
-    <p class="muted" id="modelSource"></p>
+    <p class="muted" id="modelSource" style="white-space:pre-line"></p>
     <h2 style="margin-top:14px">2. 選擇分析資料檔</h2>
     <div class="row">
       <span class="btn primary file-btn">選擇檔案（可多選）<input id="file" type="file" multiple></span>
+    </div>
+    <div class="row hidden" id="pasteRow" style="margin-top:8px">
+      <button class="btn primary" id="pasteBtn" type="button">從剪貼簿讀取</button>
     </div>
     <details>
       <summary>怎麼取得分析資料檔？</summary>
@@ -116,6 +119,8 @@ footer{color:var(--muted);font-size:12px;text-align:center;margin-top:20px}
     <section class="card">
       <h2>循環與使用年資</h2>
       <div class="grid g4" id="cycleStats"></div>
+      <p class="muted" id="cycleNote"></p>
+      <p class="muted">循環次數：電池累計放出相當於 100% 容量算一次，不一定是一次充電（Apple 定義）。</p>
     </section>
 
     <section class="card">
@@ -168,23 +173,40 @@ footer{color:var(--muted);font-size:12px;text-align:center;margin-top:20px}
   </div>
 
   <section class="card" id="historyCard">
-    <h2>歷史與比較</h2>
-    <p class="muted">每讀一份檔案會在這支手機存一筆精簡紀錄（不含任何識別資料）。同一份檔案重讀不會重複。</p>
+    <h2>歷史與比較（<span id="histCount">0</span> 筆）</h2>
+    <p class="muted">每讀一份檔案會在這支手機存一筆紀錄（含完整電池原始欄位，不含識別資料），同一份檔案重讀不重複。</p>
     <div class="row">
       <select id="metric" aria-label="趨勢項目"></select>
     </div>
-    <div id="trend"></div>
     <div class="row" style="margin-top:8px">
+      <select id="xAxis" aria-label="橫軸">
+        <option value="date">橫軸：日期</option>
+        <option value="cycle">橫軸：循環次數</option>
+      </select>
+      <select id="maWin" aria-label="移動平均">
+        <option value="0">不顯示移動平均</option>
+        <option value="3">移動平均 3 筆</option>
+        <option value="5" selected>移動平均 5 筆</option>
+        <option value="7">移動平均 7 筆</option>
+      </select>
+    </div>
+    <div id="trend"></div>
+    <div class="muted" id="trendStats" style="margin-top:6px"></div>
+    <div class="row" style="margin-top:12px">
       <label for="cmpA">比較</label>
       <select id="cmpA" aria-label="比較 A"></select>
       <select id="cmpB" aria-label="比較 B"></select>
     </div>
     <div class="scroll"><table id="cmpTable"></table></div>
     <div class="row" style="margin-top:10px">
-      <button class="btn small" id="exportBtn" type="button">匯出紀錄</button>
-      <span class="btn small file-btn">匯入紀錄<input id="importFile" type="file" accept=".json,application/json"></span>
+      <button class="btn small" id="exportJsonBtn" type="button">匯出 JSON（完整、可再匯入）</button>
+      <button class="btn small" id="exportCsvBtn" type="button">匯出 CSV（Excel）</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <span class="btn small file-btn">匯入（可多選）<input id="importFile" type="file" multiple></span>
       <button class="btn small" id="clearBtn" type="button">清除全部紀錄</button>
     </div>
+    <p class="muted">匯入可以放 JSON 紀錄檔，也可以放分析資料檔或捷徑存下的精簡檔，全部會合併成一份歷史。</p>
     <div id="historyMsg"></div>
   </section>
 

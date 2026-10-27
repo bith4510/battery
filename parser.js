@@ -11,7 +11,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  const PARSER_VERSION = '1.0';
+  const PARSER_VERSION = '1.1';
 
   // 電池主紀錄名稱（iOS 27.0 實測）；之後 Apple 改名時在這裡加候選名稱
   const BATTERY_RECORD_NAMES = ['BatteryConfigValueHistogramFinal_V2', 'BatteryConfigValueHistogramFinal'];
@@ -213,6 +213,9 @@
       chargeCurrentMaxA: num(b.MaximumChargeCurrent) !== null ? b.MaximumChargeCurrent / 1000 : null,
       dischargeCurrentMaxA: num(b.MaximumDischargeCurrent) !== null ? Math.abs(b.MaximumDischargeCurrent) / 1000 : null,
       fccSpread: (num(b.MaximumFCC) !== null && num(b.MinimumFCC) !== null) ? b.MaximumFCC - b.MinimumFCC : null,
+      // C 率＝電流（A）÷ 設計容量（Ah），電池業界描述充放電強度的標準單位
+      chargeCRate: (design && num(b.MaximumChargeCurrent) !== null) ? (b.MaximumChargeCurrent / 1000) / (design / 1000) : null,
+      dischargeCRate: (design && num(b.MaximumDischargeCurrent) !== null) ? (Math.abs(b.MaximumDischargeCurrent) / 1000) / (design / 1000) : null,
       originalBatteryHint: b.BatterySerialChanged === false ? '電池序號未變更' : (b.BatterySerialChanged === true ? '電池序號曾變更' : '無資料'),
     };
   }
@@ -264,6 +267,10 @@
       dailyMaxSoc: num(b.DailyMaxSoc), dailyMinSoc: num(b.DailyMinSoc),
       screenOnH: u.totalSec ? u.screenOnSec / 3600 : null,
       chargingH: u.totalSec ? u.chargingSec / 3600 : null,
+      // v1.1 起保存完整電池原始欄位（不含識別資料），日後公式更新可直接重算
+      raw: Object.assign({}, b),
+      usage: u,
+      parserVersion: PARSER_VERSION,
     };
   }
 
@@ -275,6 +282,35 @@
     return list;
   }
 
-  return { PARSER_VERSION, BATTERY_RECORD_NAMES, parse, derive, summarizeUsage, snapshot, mergeHistory,
+  /*
+   * 最小平方法線性回歸 y = a + b·x
+   * b = Σ(x-x̄)(y-ȳ) / Σ(x-x̄)²，a = ȳ - b·x̄，R² = 1 - SSres/SStot
+   * 少於 2 點或 x 全相同時回傳 null（斜率無定義）；y 全相同時 R² 定為 1（完全由直線解釋）
+   */
+  function linearRegression(pts) {
+    const v = (pts || []).filter(p => num(p.x) !== null && num(p.y) !== null);
+    const n = v.length;
+    if (n < 2) return null;
+    let sx = 0, sy = 0;
+    for (const p of v) { sx += p.x; sy += p.y; }
+    const mx = sx / n, my = sy / n;
+    let sxx = 0, sxy = 0, syy = 0;
+    for (const p of v) { const dx = p.x - mx, dy = p.y - my; sxx += dx * dx; sxy += dx * dy; syy += dy * dy; }
+    if (sxx === 0) return null;
+    const slope = sxy / sxx, intercept = my - slope * mx;
+    let ssRes = 0;
+    for (const p of v) { const e = p.y - (intercept + slope * p.x); ssRes += e * e; }
+    const r2 = syy === 0 ? 1 : 1 - ssRes / syy;
+    return { n, slope, intercept, r2, xMin: Math.min(...v.map(p => p.x)), xMax: Math.max(...v.map(p => p.x)) };
+  }
+
+  // 簡單移動平均：依 x 排序後，每點取「含自己在內往前 window 點」的平均；點數不足 window 時用現有點數
+  function movingAverage(pts, window) {
+    const v = (pts || []).filter(p => num(p.x) !== null && num(p.y) !== null).slice().sort((a, b) => a.x - b.x);
+    const w = Math.max(1, Math.floor(window || 1));
+    return v.map((p, i) => { const s = v.slice(Math.max(0, i - w + 1), i + 1); return { x: p.x, y: s.reduce((t, q) => t + q.y, 0) / s.length }; });
+  }
+
+  return { PARSER_VERSION, BATTERY_RECORD_NAMES, parse, derive, summarizeUsage, snapshot, mergeHistory, linearRegression, movingAverage,
            _internal: { parseHeaderTime, stripPrefix, mergeFill, epochToDate } };
 });

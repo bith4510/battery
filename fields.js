@@ -12,12 +12,12 @@
     CycleCount:              { label: '循環次數', unit: '次', level: 'known', group: 'cycle' },
     CycleCountLastQmax:      { label: '上次更新化學容量時的循環次數', unit: '次', level: 'known', group: 'cycle' },
     MaximumCapacityPercent:  { label: '系統健康度（最大容量）', unit: '%', level: 'known', group: 'health' },
-    AppleRawMaxCapacity:     { label: '原始最大容量', unit: 'mAh', level: 'known', group: 'capacity' },
-    NominalChargeCapacity:   { label: '標稱滿充容量', unit: 'mAh', level: 'known', group: 'capacity' },
-    NCCMax:                  { label: '標稱滿充容量（最大）', unit: 'mAh', level: 'known', group: 'capacity' },
-    NCCMin:                  { label: '標稱滿充容量（最小）', unit: 'mAh', level: 'known', group: 'capacity' },
-    MaximumFCC:              { label: '滿充容量 FCC（歷史最大）', unit: 'mAh', level: 'known', group: 'capacity' },
-    MinimumFCC:              { label: '滿充容量 FCC（歷史最小）', unit: 'mAh', level: 'known', group: 'capacity' },
+    AppleRawMaxCapacity:     { label: '滿充容量 FCC', unit: 'mAh', level: 'known', group: 'capacity' },
+    NominalChargeCapacity:   { label: '標稱容量（系統健康度依此計算）', unit: 'mAh', level: 'known', group: 'capacity' },
+    NCCMax:                  { label: '標稱容量（最大）', unit: 'mAh', level: 'known', group: 'capacity' },
+    NCCMin:                  { label: '標稱容量（最小）', unit: 'mAh', level: 'known', group: 'capacity' },
+    MaximumFCC:              { label: '滿充容量 FCC（終身最大）', unit: 'mAh', level: 'guess', group: 'capacity' },
+    MinimumFCC:              { label: '滿充容量 FCC（終身最小）', unit: 'mAh', level: 'guess', group: 'capacity' },
     QmaxCell0:               { label: '化學容量 Qmax（電芯 0）', unit: 'mAh', level: 'known', group: 'capacity' },
     MaximumQmax:             { label: '化學容量 Qmax（歷史最大）', unit: 'mAh', level: 'known', group: 'capacity' },
     MinimumQmax:             { label: '化學容量 Qmax（歷史最小）', unit: 'mAh', level: 'known', group: 'capacity' },
@@ -45,13 +45,14 @@
     OriginalBattery:         { label: '原廠電池', unit: '', level: 'known', group: 'status' },
     LifetimeUPOCount:        { label: '非預期關機次數（UPO）', unit: '次', level: 'guess', group: 'status' },
     LastUPOTimestamp:        { label: '最近一次非預期關機時間', unit: '', level: 'guess', group: 'status' },
-    WeightedRa:              { label: '加權內阻 Ra', unit: '（原始值）', level: 'guess', group: 'ra' },
+    WeightedRa:              { label: '加權內阻 Ra（TI 阻抗追蹤）', unit: '（原始值）', level: 'guess', group: 'ra' },
     ChemicalWeightedRa:      { label: '化學加權內阻 Ra', unit: '（原始值）', level: 'guess', group: 'ra' },
-    BatteryHealthMetric:     { label: '電池健康指標（意義未知）', unit: '', level: 'unknown', group: 'status' },
+    BatteryHealthMetric:     { label: '電池健康指標 HealthMetric（用途未公開）', unit: '', level: 'unknown', group: 'status' },
     RSS:                     { label: 'RSS（意義未知）', unit: '', level: 'unknown', group: 'status' },
     GasGaugeFirmwareVersion: { label: '電量計韌體版本', unit: '', level: 'known', group: 'status' },
     ChemID:                  { label: '電芯化學 ID', unit: '', level: 'known', group: 'status' },
     AlgoChemID:              { label: '演算法化學 ID', unit: '', level: 'known', group: 'status' },
+    ITMiscStatus:            { label: '阻抗追蹤狀態位元（TI ITMiscStatus）', unit: '', level: 'guess', group: 'status' },
     ResetCnt:                { label: '電量計重置次數', unit: '次', level: 'guess', group: 'status' },
     ServiceOption:           { label: '服務選項', unit: '', level: 'unknown', group: 'status' },
     batteryServiceFlags:     { label: '電池服務旗標', unit: '', level: 'unknown', group: 'status' },
@@ -60,7 +61,7 @@
   function info(key) {
     if (F[key]) return F[key];
     const m = key.match(/^RaTable_(\d+)$/);
-    if (m) return { label: '內阻表第 ' + m[1] + ' 段', unit: '（原始值）', level: 'guess', group: 'ra' };
+    if (m) return { label: '內阻表 Ra 第 ' + m[1] + ' 點（0–100% 放電深度）', unit: '（原始值）', level: 'guess', group: 'ra' };
     return { label: key, unit: '', level: 'unknown', group: 'other' };
   }
   return { FIELDS: F, info };

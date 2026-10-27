@@ -1,0 +1,1 @@
+(?m)^.*(?:"bug_type"|"name"\s*:\s*"(?:Battery[A-Za-z0-9_]*|JITCharging[A-Za-z0-9_]*|SlowChargingReason|RawDeviceStateHistogram|DailyWirelessUsageAgg)").*$
