@@ -1,7 +1,8 @@
 /* 電池健康度 Plus 網頁版 — 畫面邏輯 */
 (function () {
   'use strict';
-  const APP_VERSION = '1.3.1';
+  const APP_VERSION = '1.3.2';
+  const NO_BATTERY_LIST_MAX = 5;   // 合併訊息最多列出幾個檔名
   const P = window.BatteryParser, M = window.BatteryModels, FD = window.BatteryFields;
   const LS_MODEL = 'bhp_model_v1', LS_CUSTOM = 'bhp_custom_design_v1', LS_HISTORY = 'bhp_history_v1';
   const $ = (id) => document.getElementById(id);
@@ -121,9 +122,12 @@
   function ingest(items, box, results) {
     let history = loadHistory(), latest = null, okCount = 0;
     const report = (name, ok, error) => { if (results) results.push({ name, ok, error: error || '' }); };
+    // 沒有電池紀錄的檔案（session 小檔、當天最新的檔）一次讀很多時會洗版：先收集，最後合併成一則
+    const noBat = [];
     for (const it of items) {
       if (it.text === null) { msg(box, 'err', `${it.name}：讀取失敗`); report(it.name, false, '讀取失敗'); continue; }
       const parsed = P.parse(it.text);
+      if (!parsed.ok && parsed.noBattery) { noBat.push({ name: it.name, error: parsed.error, text: it.text, warnings: parsed.warnings }); report(it.name, false, parsed.error); continue; }
       parsed.warnings.forEach(w => msg(box, 'warn', `${it.name}：${w}`));
       if (!parsed.ok) { msg(box, 'err', `${it.name}：${parsed.error}`); msg(box, 'warn', '診斷（不含個人資料）：' + diagnose(it.text)); report(it.name, false, parsed.error); continue; }
       okCount++; report(it.name, true, '');
@@ -132,6 +136,14 @@
       const tNew = parsed.meta.fileTime ? parsed.meta.fileTime.getTime() : -Infinity;
       const tOld = latest && latest.meta.fileTime ? latest.meta.fileTime.getTime() : -Infinity;
       if (!latest || tNew > tOld) latest = parsed;
+    }
+    if (noBat.length === 1) {
+      noBat[0].warnings.forEach(w => msg(box, 'warn', `${noBat[0].name}：${w}`));
+      msg(box, 'err', `${noBat[0].name}：${noBat[0].error}`); msg(box, 'warn', '診斷（不含個人資料）：' + diagnose(noBat[0].text));
+    } else if (noBat.length > 1) {
+      const shown = noBat.slice(0, NO_BATTERY_LIST_MAX).map(x => x.name).join('、');
+      msg(box, 'warn', `另有 ${noBat.length} 份沒有電池紀錄，已略過（多半是檔名含 session 的小檔，或當天最新、還沒收集到的檔）：${shown}` +
+        (noBat.length > NO_BATTERY_LIST_MAX ? ` 等` : '') + '。');
     }
     if (okCount) {
       if (!saveHistory(history)) msg(box, 'warn', '這個瀏覽器無法儲存紀錄（可能是私密瀏覽），趨勢圖只在這次有效。');

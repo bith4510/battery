@@ -161,6 +161,7 @@
     result.lowVoltageBins.sort((a, b) => a.bin - b.bin);
 
     if (!packRecords.length) {
+      result.noBattery = true;   // 讓介面把多份「沒有電池紀錄」合併成一則訊息
       result.error = '找不到電池紀錄（' + BATTERY_RECORD_NAMES[0] + '）。可能是：分析檔太新還沒收集到、選錯檔案，或 Apple 改了紀錄名稱。';
       return result;
     }
