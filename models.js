@@ -1,4 +1,9 @@
 /*
+ * 聲明：本專案的程式碼與文件全部由 AI（Anthropic 的 Claude）產生，內容依據公開的網路資料（Apple 文件、TI 電量計資料、各地論壇與拆解資料等）整理。
+ * 專案擁有者不主張任何著作權，以公有領域方式釋出（CC0 1.0：https://creativecommons.org/publicdomain/zero/1.0/），任何人可自由使用、修改、散布。
+ * 非 Apple 官方工具；數值僅供參考，不提供任何保證。
+ */
+/*
  * 型號設計容量對照表（mAh）
  * Apple 不公布 mAh，以下數值來自監管資料（中國 3C／監管資料庫、巴西 ANATEL、歐盟能源標籤、Chemtrec Wh 申報）、
  * 拆解標籤與多家媒體交叉比對（2026-10-27 調查，詳見 _claude_cache/RESEARCH_*.md）。

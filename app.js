@@ -1,7 +1,12 @@
+/*
+ * 聲明：本專案的程式碼與文件全部由 AI（Anthropic 的 Claude）產生，內容依據公開的網路資料（Apple 文件、TI 電量計資料、各地論壇與拆解資料等）整理。
+ * 專案擁有者不主張任何著作權，以公有領域方式釋出（CC0 1.0：https://creativecommons.org/publicdomain/zero/1.0/），任何人可自由使用、修改、散布。
+ * 非 Apple 官方工具；數值僅供參考，不提供任何保證。
+ */
 /* 電池健康度 Plus 網頁版 — 畫面邏輯 */
 (function () {
   'use strict';
-  const APP_VERSION = '1.3.2';
+  const APP_VERSION = '1.3.4';
   const NO_BATTERY_LIST_MAX = 5;   // 合併訊息最多列出幾個檔名
   const P = window.BatteryParser, M = window.BatteryModels, FD = window.BatteryFields;
   const LS_MODEL = 'bhp_model_v1', LS_CUSTOM = 'bhp_custom_design_v1', LS_HISTORY = 'bhp_history_v1';
@@ -205,10 +210,21 @@
     // 健康度
     const hs = (label, v, sub) => stat(label, `<span style="color:${healthColor(v)}">${fmt(v, 1)}${v === null ? '' : '%'}</span>`, sub);
     $('healthStats').innerHTML =
-      hs('系統顯示', d.healthSystem, '分析檔 MaximumCapacityPercent') +
-      hs('滿充容量 FCC', d.healthRaw, `${fmt(b.AppleRawMaxCapacity)} ÷ ${fmt(d.design)} mAh（coconutBattery 算法）`) +
-      hs('標稱容量', d.healthNominal, `${fmt(b.NominalChargeCapacity)} ÷ ${fmt(d.design)} mAh`) +
-      hs('化學容量 Qmax', d.healthQmax, `${fmt(b.QmaxCell0)} ÷ ${fmt(d.design)} mAh`);
+      hs('系統顯示（iOS 設定）', d.healthSystem, '＝標稱容量 ÷ 設計容量，取整數') +
+      hs('標稱容量 ★ 看衰退用這個', d.healthNominal, `${fmt(b.NominalChargeCapacity)} ÷ ${fmt(d.design)} mAh；iOS 健康度的依據`) +
+      hs('滿充容量 FCC（現在實際可用）', d.healthRaw, `${fmt(b.AppleRawMaxCapacity)} ÷ ${fmt(d.design)} mAh；隨溫度、負載跳動（coconutBattery 用這個）`) +
+      hs('化學容量 Qmax（電芯本身）', d.healthQmax, `${fmt(b.QmaxCell0)} ÷ ${fmt(d.design)} mAh；不含內阻損失，偶爾才更新`);
+    // 各容量怎麼看：哪個是 iOS 算的、哪個是現在實際可用、哪個當衰退依據
+    const gap = (b.QmaxCell0 && b.AppleRawMaxCapacity) ? b.QmaxCell0 - b.AppleRawMaxCapacity : null;
+    $('capGuide').innerHTML =
+      '<b>這幾個容量怎麼看</b>' +
+      '<ul>' +
+      `<li><b>看電池衰退、跟以前比：用「標稱容量」</b>（目前 ${fmt(b.NominalChargeCapacity)} mAh）。iOS「設定」的電池健康度就是它 ÷ 設計容量取整數（上面的一致性檢查可驗證），數值變化平穩，最適合畫趨勢。Apple 沒有公開它怎麼從 FCC 算出來。${tag('guess')}</li>` +
+      `<li><b>現在充飽實際能用多少：看「滿充容量 FCC」</b>（目前 ${fmt(b.AppleRawMaxCapacity)} mAh）。電量計估算從充飽放到截止電壓能放出的電量，會隨溫度、放電電流、內阻變動，單次數字會跳，看趨勢要開移動平均。</li>` +
+      `<li><b>電芯本身還能存多少：看「化學容量 Qmax」</b>（目前 ${fmt(b.QmaxCell0)} mAh）。極小電流放到底的總電量，不含內阻造成的電壓降損失，所以通常最大；只在手機靜置夠久時才重新量測（上次在第 ${fmt(b.CycleCountLastQmax)} 次循環），所以會一階一階變。</li>` +
+      (gap !== null ? `<li><b>Qmax − FCC ＝ ${fmt(gap)} mAh</b>：這段主要是內阻造成、放電時用不到的部分。之後這個差距越來越大，代表內阻在上升（低溫、大電流時也會暫時變大）。</li>` : '') +
+      '<li>「設計容量」是型號的額定值，不是量測值；新電池量到超過 100% 屬正常。</li>' +
+      '</ul>';
     // 一致性檢查：標稱容量 ÷ 設計容量 四捨五入後，應等於系統顯示的健康度；不等時提示型號或設計容量可能選錯
     let check = '';
     if (d.design && d.healthNominal !== null && d.healthSystem !== null) {
