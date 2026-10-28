@@ -1,7 +1,7 @@
 /* 電池健康度 Plus 網頁版 — 畫面邏輯 */
 (function () {
   'use strict';
-  const APP_VERSION = '1.3';
+  const APP_VERSION = '1.3.1';
   const P = window.BatteryParser, M = window.BatteryModels, FD = window.BatteryFields;
   const LS_MODEL = 'bhp_model_v1', LS_CUSTOM = 'bhp_custom_design_v1', LS_HISTORY = 'bhp_history_v1';
   const $ = (id) => document.getElementById(id);
@@ -17,13 +17,29 @@
     if (hostHistory) return hostHistory.slice();
     try { const a = JSON.parse(lsGet(LS_HISTORY, '[]')); return Array.isArray(a) ? a : []; } catch (e) { return []; }
   }
+  // 瀏覽器儲存約 5 MB（且與同網域其他工具共用）：只有最近 RAW_KEEP 筆保留完整原始欄位，
+  // 更早的只留關鍵數值（完整原始資料仍在 iCloud 的分析檔）。一筆含原始欄位約 2.6 KB、不含約 0.8 KB。
+  const RAW_KEEP = 300, RAW_KEEP_TIGHT = 50;
+  function compactForStorage(h, keep) {
+    if (h.length <= keep) return h;
+    const cut = h.length - keep;
+    return h.map((x, i) => {
+      if (i >= cut || !x || !x.raw) return x;
+      const y = Object.assign({}, x); delete y.raw; return y;
+    });
+  }
+  function storeLocal(h) {
+    // 依時間排序後保留最新的原始欄位；空間不足時再縮到 RAW_KEEP_TIGHT 筆重試
+    return lsSet(LS_HISTORY, JSON.stringify(compactForStorage(h, RAW_KEEP)))
+      || lsSet(LS_HISTORY, JSON.stringify(compactForStorage(h, RAW_KEEP_TIGHT)));
+  }
   function saveHistory(h) {
     if (HOST && typeof HOST.saveHistory === 'function') {
-      hostHistory = h.slice();
-      lsSet(LS_HISTORY, JSON.stringify(h));
+      hostHistory = h.slice();          // 電腦版：完整保存在電腦的 history.json，不刪原始欄位
+      storeLocal(h);
       try { HOST.saveHistory(JSON.stringify(h)); return true; } catch (e) { return false; }
     }
-    return lsSet(LS_HISTORY, JSON.stringify(h));
+    return storeLocal(h);
   }
 
   // ---------- 格式化 ----------
@@ -448,7 +464,9 @@
   ];
   function csvCell(v) {
     if (v === null || v === undefined) return '';
-    const s = typeof v === 'number' ? String(v) : String(v);
+    let s = String(v);
+    // 文字開頭是 = + - @ 時 Excel 會當公式執行，前面加 ' 防止（數字不處理，負數照常）
+    if (typeof v !== 'number' && /^[=+\-@\t\r]/.test(s)) s = "'" + s;
     return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   }
   function buildCsv(h) {
