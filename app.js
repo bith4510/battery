@@ -6,10 +6,13 @@
 /* 電池健康度 Plus 網頁版 — 畫面邏輯 */
 (function () {
   'use strict';
-  const APP_VERSION = '1.3.4';
+  const APP_VERSION = '1.3.8';
   const NO_BATTERY_LIST_MAX = 5;   // 合併訊息最多列出幾個檔名
   const P = window.BatteryParser, M = window.BatteryModels, FD = window.BatteryFields;
   const LS_MODEL = 'bhp_model_v1', LS_CUSTOM = 'bhp_custom_design_v1', LS_HISTORY = 'bhp_history_v1';
+  // v1.3.6：各裝置分開（型號設定與目前選的裝置）
+  const LS_DEVMODEL = 'bhp_dev_model_v1', LS_CURDEV = 'bhp_cur_dev_v1';
+  const UNKNOWN_DEV = 'unknown';
   const $ = (id) => document.getElementById(id);
   const MAX_FILE_BYTES = 50 * 1024 * 1024; // 分析資料檔實測約 2 MB；超過 50 MB 視為選錯檔，不讀進記憶體
 
@@ -19,7 +22,8 @@
   // 電腦版（PyQt 視窗）會在頁面載入前放入 window.BHP_HOST：歷史以電腦上的 JSON 檔為主，瀏覽器儲存只是附帶
   const HOST = (typeof window !== 'undefined' && window.BHP_HOST) ? window.BHP_HOST : null;
   let hostHistory = (HOST && Array.isArray(HOST.initialHistory)) ? HOST.initialHistory.slice() : null;
-  function loadHistory() {
+  function loadHistory() { return normalizeDevs(loadHistoryRaw()); }
+  function loadHistoryRaw() {
     if (hostHistory) return hostHistory.slice();
     try { const a = JSON.parse(lsGet(LS_HISTORY, '[]')); return Array.isArray(a) ? a : []; } catch (e) { return []; }
   }
@@ -52,6 +56,8 @@
   function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
   function fmt(v, d) { if (v === null || v === undefined || (typeof v === 'number' && !isFinite(v))) return '—'; return typeof v === 'number' ? v.toLocaleString('zh-TW', { minimumFractionDigits: d || 0, maximumFractionDigits: d || 0 }) : esc(String(v)); }
   function fmtDate(dt) { if (!dt) return '—'; const d = new Date(dt); if (isNaN(d)) return '—'; const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; }
+  // DOFU 是 UTC 午夜的週起點，用 UTC 日期顯示才不會因時區差一天
+  function fmtDateUTC(dt) { if (!dt) return '—'; const d = new Date(dt); if (isNaN(d)) return '—'; const p = n => String(n).padStart(2, '0'); return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`; }
   function fmtDateTime(dt) { if (!dt) return '—'; const d = new Date(dt); if (isNaN(d)) return '—'; const p = n => String(n).padStart(2, '0'); return `${fmtDate(d)} ${p(d.getHours())}:${p(d.getMinutes())}`; }
   function fmtH(sec) { if (sec === null || sec === undefined) return '—'; const h = sec / 3600; return h >= 1 ? fmt(h, 1) + ' 小時' : fmt(sec / 60, 0) + ' 分'; }
   function tag(level) { return level === 'guess' ? '<span class="tag guess">推定</span>' : level === 'unknown' ? '<span class="tag unknown">未知</span>' : ''; }
@@ -65,6 +71,7 @@
   function msg(el, kind, text) { el.insertAdjacentHTML('beforeend', `<div class="msg ${kind}">${esc(text)}</div>`); }
 
   // ---------- 型號 ----------
+  let showSource = () => {};
   function initModels() {
     const sel = $('model');
     // 依系列分組（optgroup），選項文字縮短以免手機上被截斷
@@ -73,12 +80,10 @@
     const short = (n) => n.replace('iPhone ', '').replace('（實體 SIM 卡槽）', '・實體 SIM').replace('（僅 eSIM）', '・eSIM');
     sel.innerHTML = groups.map(g => `<optgroup label="${esc(g.name)}">` + g.items.map(m => `<option value="${m.id}">${esc(short(m.name))}・${m.design} mAh</option>`).join('') + '</optgroup>').join('') +
       '<optgroup label="其他"><option value="custom">自訂設計容量</option></optgroup>';
-    sel.value = lsGet(LS_MODEL, M.DEFAULT_ID);
-    if (!sel.value) sel.value = M.DEFAULT_ID;
-    $('customDesign').value = lsGet(LS_CUSTOM, '');
-    const showSource = () => {
+    applyDeviceModelToUi();
+    showSource = () => {
       const m = M.find(sel.value);
-      const conf = m ? (m.conf === 'high' ? '可信度高' : '可信度中') : '';
+      const conf = m ? ({ high: '可信度高', mid: '可信度中', real: '推算值，經實機一致性檢查', est: '推估值，可信度低，請用一致性檢查確認' }[m.conf] || '可信度中') : '';
       $('modelSource').textContent = '分析資料檔不含型號與設計容量，健康度百分比依這裡選的容量計算。' + M.SOURCE + '。' +
         (m ? `\n${m.name}：${m.design} mAh${m.wh ? '／' + m.wh + ' Wh' : ''}（${conf}；來源：${m.src}）${m.note ? '。' + m.note : ''}` : '');
     };
@@ -86,19 +91,128 @@
     showSource();
     const sync = () => {
       $('customDesign').classList.toggle('hidden', sel.value !== 'custom');
+      setDevModel(curDev(), { model: sel.value, custom: $('customDesign').value, auto: false });   // 手動選的，記在目前裝置
       lsSet(LS_MODEL, sel.value);
       lsSet(LS_CUSTOM, $('customDesign').value);
-      if (current) render(current);
-      renderHistory(loadHistory());
+      if (current && devOfParsed(current) === curDev()) render(current);
+      renderDevices(); renderHistory(loadHistory());
     };
     sel.addEventListener('change', sync);
     $('customDesign').addEventListener('input', sync);
     $('customDesign').classList.toggle('hidden', sel.value !== 'custom');
+    $('device').addEventListener('change', () => {
+      lsSet(LS_CURDEV, $('device').value);
+      applyDeviceModelToUi(); showSource();
+      const p = latestParsed[curDev()];
+      if (p) { current = p; render(p); } else { current = null; $('report').classList.add('hidden'); }
+      renderHistory(loadHistory());
+    });
   }
-  function designCapacity() {
-    const sel = $('model');
-    if (sel.value === 'custom') { const v = Number($('customDesign').value); return v >= 500 && v <= 10000 ? v : null; }
-    const m = M.find(sel.value); return m ? m.design : null;
+  function designCapacity(dev) {
+    const s = devModel(dev === undefined ? curDev() : dev);
+    if (!s) return null;
+    if (s.model === 'custom') { const v = Number(s.custom); return v >= 500 && v <= 20000 ? v : null; }
+    const m = M.find(s.model); return m ? m.design : null;
+  }
+
+  // ---------- 裝置（v1.3.6）：分析檔沒有型號代碼，以電池首次使用日區分；型號依「標稱容量÷系統健康度」自動猜 ----------
+  const latestParsed = {};            // 這次開頁面讀過的各裝置最新一份（切換裝置時直接顯示詳細報告）
+  function devOfSnap(x) { return (x && x.dev && x.dev !== UNKNOWN_DEV && x.dev) || (x && x.raw && P.deviceKey(x.raw)) || UNKNOWN_DEV; }   // 存成 unknown 的也會重新判斷
+  function devOfParsed(p) { return (p && P.deviceKey(p.battery)) || UNKNOWN_DEV; }
+  // 裝置特徵：電池製造週次、化學代碼（電池本身固定）＋地區碼、容量、記憶體（裝置固定）；用來把沒有首次使用日的紀錄歸回原裝置
+  // 實機發現：同一支 iPhone 有些日子的分析檔 DOFU 是 null（2026-10-25、10-27），其他欄位都相同
+  const FP_KEYS = ['w', 'c', 'sku', 'cap', 'ram'];
+  function fpOf(x) {
+    const r = (x && x.raw) || {}, i = (x && x.devInfo) || {};
+    const v = k => (k === undefined || k === null || k === '' ? null : k);
+    return { w: v(r.WeekMfd), c: v(r.ChemID), sku: v(i.sku), cap: v(i.capacityGB), ram: v(i.ramGB) };
+  }
+  // 回傳相同欄位數；有任何欄位衝突回傳 -1
+  function fpMatch(a, b) {
+    let m = 0;
+    for (const k of FP_KEYS) { if (a[k] === null || b[k] === null) continue; if (a[k] !== b[k]) return -1; m++; }
+    return m;
+  }
+  // 沒有 dev 的紀錄：先用原始欄位補；再用裝置特徵比對（至少 2 項相同、沒有衝突、只對到一台）；都不行且只有一台裝置時歸給那一台
+  function normalizeDevs(h) {
+    const devs = new Map();
+    for (const x of h) { const d = devOfSnap(x); if (d !== UNKNOWN_DEV) { if (!devs.has(d)) devs.set(d, []); devs.get(d).push(fpOf(x)); } }
+    const only = devs.size === 1 ? [...devs.keys()][0] : null;
+    const byFingerprint = (x) => {
+      const f = fpOf(x), hits = [];
+      for (const [d, fps] of devs) {
+        const best = Math.max(...fps.map(g => fpMatch(f, g)));
+        if (best >= 2 && !fps.some(g => fpMatch(f, g) < 0)) hits.push(d);
+      }
+      return hits.length === 1 ? hits[0] : null;
+    };
+    return h.map(x => {
+      let dev = devOfSnap(x);
+      if (dev === UNKNOWN_DEV) dev = byFingerprint(x) || only || UNKNOWN_DEV;
+      return x.dev === dev ? x : Object.assign({}, x, { dev });
+    });
+  }
+  function devList(h) {
+    const map = new Map();
+    for (const x of h) { const k = devOfSnap(x); if (!map.has(k)) map.set(k, []); map.get(k).push(x); }
+    return [...map.entries()].map(([key, snaps]) => ({ key, snaps, last: snaps[snaps.length - 1] }));
+  }
+  function devModels() { try { const o = JSON.parse(lsGet(LS_DEVMODEL, '{}')); return o && typeof o === 'object' ? o : {}; } catch (e) { return {}; } }
+  function devModel(dev) { return devModels()[dev] || null; }
+  function setDevModel(dev, v) { const o = devModels(); o[dev] = v; lsSet(LS_DEVMODEL, JSON.stringify(o)); }
+  function curDev() {
+    const h = loadHistory(), list = devList(h), saved = lsGet(LS_CURDEV, '');
+    if (list.some(d => d.key === saved)) return saved;
+    return list.length ? devOfSnap(h[h.length - 1]) : UNKNOWN_DEV;
+  }
+  // 還沒設定型號的裝置：猜得出唯一型號就用它；否則沿用舊版的全域型號設定（舊使用者的 iPhone 不受影響）
+  function ensureDevModels(h) {
+    const o = devModels(); let changed = false;
+    for (const d of devList(h)) {
+      if (o[d.key]) continue;
+      const ipad = d.snaps.some(x => x.devInfo && x.devInfo.ipad === true) ? true : null;
+      const c = P.guessModels(d.snaps, M.MODELS, ipad);
+      const legacy = lsGet(LS_MODEL, ''), legacyCustom = lsGet(LS_CUSTOM, '');
+      const pre = d.key !== UNKNOWN_DEV ? o[UNKNOWN_DEV] : null;     // 還沒讀檔前手動選的型號
+      let v;
+      if (pre && pre.auto === false && (pre.model === 'custom' || !c.length || c.some(m => m.id === pre.model))) v = Object.assign({}, pre, { candidates: c.map(m => m.id) });
+      else if (c.length === 1) v = { model: c[0].id, custom: '', auto: true, candidates: [c[0].id] };
+      else if (legacy && (legacy === 'custom' || !c.length || c.some(m => m.id === legacy))) v = { model: legacy, custom: legacyCustom, auto: true, candidates: c.map(m => m.id) };
+      else if (c.length) v = { model: c[0].id, custom: '', auto: true, candidates: c.map(m => m.id) };
+      else v = { model: M.DEFAULT_ID, custom: '', auto: true, candidates: [] };
+      o[d.key] = v; changed = true;
+    }
+    if (changed) lsSet(LS_DEVMODEL, JSON.stringify(o));
+  }
+  function devLabel(d) {
+    const s = devModel(d.key), m = s && s.model !== 'custom' ? M.find(s.model) : null;
+    const ipad = d.snaps.some(x => x.devInfo && x.devInfo.ipad === true);
+    const name = m ? m.name : (s && s.model === 'custom' ? `自訂 ${s.custom || '?'} mAh` : (ipad ? 'iPad（型號未定）' : '型號未定'));
+    const fuDate = d.last && d.last.devInfo && d.last.devInfo.firstUse ? new Date(d.last.devInfo.firstUse)
+      : (d.last && d.last.raw && d.last.raw.DOFU ? P._internal.epochToDate(d.last.raw.DOFU) : null);
+    // DOFU 以週為單位（週四 00:00 UTC 起算），顯示成「該週」範圍
+    const fu = !fuDate ? '' : (fuDate.getTime() % 604800000 === 0
+      ? `${fmtDateUTC(fuDate)}～${fmtDateUTC(new Date(fuDate.getTime() + 6 * 86400000)).slice(5)}` : fmtDateUTC(fuDate));
+    const shortName = name.replace(/，20\d\d）/, '）').replace('（實體 SIM 卡槽）', '・實體 SIM').replace('（僅 eSIM）', '・eSIM');   // 手機寬度下拉選單放得下
+    return d.key === UNKNOWN_DEV ? `無法辨識的紀錄（${d.snaps.length} 筆）` : `${shortName}${fu ? '・' + fu + ' 起用' : ''}（${d.snaps.length} 筆）`;
+  }
+  function renderDevices() {
+    const h = loadHistory(), list = devList(h), cd = curDev();
+    $('device').innerHTML = list.map(d => `<option value="${esc(d.key)}">${esc(devLabel(d))}</option>`).join('');
+    $('device').value = cd;
+    $('deviceRow').classList.toggle('hidden', list.length === 0);
+    const s = devModel(cd);
+    $('deviceNote').textContent = !list.length ? '' : (s && s.auto
+      ? (s.candidates && s.candidates.length === 1 ? '型號為自動判斷（由標稱容量與系統健康度反推設計容量），不對可以在上方改。'
+        : s.candidates && s.candidates.length > 1 ? `型號無法唯一判斷（可能是：${s.candidates.map(id => (M.find(id) || {}).name).join('、')}），請確認上方型號。`
+          : '型號無法自動判斷，請在上方選擇。') : '型號為手動選擇。') + (list.length > 1 ? `共 ${list.length} 台裝置，歷史與趨勢只顯示目前選的這台。` : '');
+  }
+  function applyDeviceModelToUi() {
+    const sel = $('model'), s = devModel(curDev());
+    sel.value = (s && s.model) || lsGet(LS_MODEL, M.DEFAULT_ID) || M.DEFAULT_ID;
+    if (!sel.value) sel.value = M.DEFAULT_ID;
+    $('customDesign').value = (s && s.custom) || '';
+    $('customDesign').classList.toggle('hidden', sel.value !== 'custom');
   }
 
   // ---------- 讀檔 ----------
@@ -136,7 +250,9 @@
       parsed.warnings.forEach(w => msg(box, 'warn', `${it.name}：${w}`));
       if (!parsed.ok) { msg(box, 'err', `${it.name}：${parsed.error}`); msg(box, 'warn', '診斷（不含個人資料）：' + diagnose(it.text)); report(it.name, false, parsed.error); continue; }
       okCount++; report(it.name, true, '');
-      history = P.mergeHistory(history, P.snapshot(parsed, designCapacity()));
+      history = P.mergeHistory(history, P.snapshot(parsed, designCapacity(devOfParsed(parsed))));
+      const pd = devOfParsed(parsed), prev = latestParsed[pd];
+      if (!prev || (parsed.meta.fileTime && (!prev.meta.fileTime || parsed.meta.fileTime > prev.meta.fileTime))) latestParsed[pd] = parsed;
       // 用時間戳數值比較；沒有時間的檔案排最舊（v1.0 用字串比較，會把星期名稱拿來比，選錯檔）
       const tNew = parsed.meta.fileTime ? parsed.meta.fileTime.getTime() : -Infinity;
       const tOld = latest && latest.meta.fileTime ? latest.meta.fileTime.getTime() : -Infinity;
@@ -151,8 +267,13 @@
         (noBat.length > NO_BATTERY_LIST_MAX ? ` 等` : '') + '。');
     }
     if (okCount) {
+      history = normalizeDevs(history);
       if (!saveHistory(history)) msg(box, 'warn', '這個瀏覽器無法儲存紀錄（可能是私密瀏覽），趨勢圖只在這次有效。');
-      msg(box, 'ok', `已讀取 ${okCount} 份，歷史共 ${history.length} 筆，顯示最新一份（${fmtDateTime(latest.meta.fileTime)}）。`);
+      ensureDevModels(history);
+      lsSet(LS_CURDEV, devOfParsed(latest));
+      const nDev = devList(history).length;
+      msg(box, 'ok', `已讀取 ${okCount} 份，歷史共 ${history.length} 筆` + (nDev > 1 ? `（${nDev} 台裝置）` : '') + `，顯示最新一份（${fmtDateTime(latest.meta.fileTime)}）。`);
+      applyDeviceModelToUi(); showSource(); renderDevices();
       current = latest; render(current); renderHistory(history);
     }
     return okCount;
@@ -215,13 +336,17 @@
       hs('滿充容量 FCC（現在實際可用）', d.healthRaw, `${fmt(b.AppleRawMaxCapacity)} ÷ ${fmt(d.design)} mAh；隨溫度、負載跳動（coconutBattery 用這個）`) +
       hs('化學容量 Qmax（電芯本身）', d.healthQmax, `${fmt(b.QmaxCell0)} ÷ ${fmt(d.design)} mAh；不含內阻損失，偶爾才更新`);
     // 各容量怎麼看：哪個是 iOS 算的、哪個是現在實際可用、哪個當衰退依據
+    // CycleCountLastQmax 在 iPhone 是「上次更新 Qmax 時的循環數」；iPad 實機只有 1～2（循環數 177），意義不同，不當循環數講
+    const lastQ = b.CycleCountLastQmax;
+    const lastQok = lastQ !== null && lastQ !== undefined && b.CycleCount && lastQ >= b.CycleCount * 0.5 && lastQ <= b.CycleCount;
+    const lastQtext = lastQok ? `上次在第 ${fmt(lastQ)} 次循環` : '上次量測時間無法判斷';
     const gap = (b.QmaxCell0 && b.AppleRawMaxCapacity) ? b.QmaxCell0 - b.AppleRawMaxCapacity : null;
     $('capGuide').innerHTML =
       '<b>這幾個容量怎麼看</b>' +
       '<ul>' +
       `<li><b>看電池衰退、跟以前比：用「標稱容量」</b>（目前 ${fmt(b.NominalChargeCapacity)} mAh）。iOS「設定」的電池健康度就是它 ÷ 設計容量取整數（上面的一致性檢查可驗證），數值變化平穩，最適合畫趨勢。Apple 沒有公開它怎麼從 FCC 算出來。${tag('guess')}</li>` +
       `<li><b>現在充飽實際能用多少：看「滿充容量 FCC」</b>（目前 ${fmt(b.AppleRawMaxCapacity)} mAh）。電量計估算從充飽放到截止電壓能放出的電量，會隨溫度、放電電流、內阻變動，單次數字會跳，看趨勢要開移動平均。</li>` +
-      `<li><b>電芯本身還能存多少：看「化學容量 Qmax」</b>（目前 ${fmt(b.QmaxCell0)} mAh）。極小電流放到底的總電量，不含內阻造成的電壓降損失，所以通常最大；只在手機靜置夠久時才重新量測（上次在第 ${fmt(b.CycleCountLastQmax)} 次循環），所以會一階一階變。</li>` +
+      `<li><b>電芯本身還能存多少：看「化學容量 Qmax」</b>（目前 ${fmt(b.QmaxCell0)} mAh）。極小電流放到底的總電量，不含內阻造成的電壓降損失，所以通常最大；只在手機靜置夠久時才重新量測（${lastQtext}），所以會一階一階變。</li>` +
       (gap !== null ? `<li><b>Qmax − FCC ＝ ${fmt(gap)} mAh</b>：這段主要是內阻造成、放電時用不到的部分。之後這個差距越來越大，代表內阻在上升（低溫、大電流時也會暫時變大）。</li>` : '') +
       '<li>「設計容量」是型號的額定值，不是量測值；新電池量到超過 100% 屬正常。</li>' +
       '</ul>';
@@ -239,10 +364,15 @@
 
     // 循環
     $('cycleStats').innerHTML =
-      stat('循環次數', fmt(b.CycleCount), `上次更新 Qmax 時：${fmt(b.CycleCountLastQmax)}`) +
-      stat('首次使用', fmtDate(d.firstUse), d.daysSinceFirstUse !== null ? `已使用 ${fmt(d.daysSinceFirstUse, 0)} 天` : '') +
+      stat('循環次數', fmt(b.CycleCount), lastQok ? `上次更新 Qmax 時：${fmt(lastQ)}` : `CycleCountLastQmax 原始值 ${fmt(lastQ)}（此裝置上意義不明）` + tag('unknown')) +
+      (d.dofuWeek
+        ? stat('首次使用（以週計）', `${fmtDateUTC(d.firstUse)}～${fmtDateUTC(d.firstUseEnd).slice(5)}`,
+          `Apple 只記到週，實際是這 7 天中的某一天；已使用約 ${fmt(d.daysSinceMin, 0)}～${fmt(d.daysSinceMax, 0)} 天`)
+        : stat('首次使用', fmtDate(d.firstUse), d.daysSinceFirstUse !== null ? `已使用 ${fmt(d.daysSinceFirstUse, 0)} 天` : '')) +
       stat('平均每天循環', fmt(d.cyclesPerDay, 2), d.cyclesPerDay !== null ? `約每 ${fmt(1 / d.cyclesPerDay, 1)} 天一次` : '') +
-      stat('累計運轉', d.operatingHours !== null ? fmt(d.operatingHours) + ' h' : '—', d.operatingRatio !== null ? `佔使用期間 ${fmt(d.operatingRatio * 100, 0)}%` + tag('guess') : '單位推定為小時' + tag('guess'));
+      stat('累計運轉', d.operatingHours !== null ? fmt(d.operatingHours) + ' h' : '—', d.operatingRatio !== null ? (d.operatingRatio > 1.02
+        ? `超過首次使用至今的時間（${fmt(d.operatingRatio * 100, 0)}%），可能含出廠前時間或單位不同` + tag('guess')
+        : `佔使用期間 ${fmt(d.operatingRatio * 100, 0)}%` + tag('guess')) : '單位推定為小時' + tag('guess'));
     const mdl = M.find($('model').value);
     $('cycleNote').innerHTML = (mdl && mdl.ratedCycles)
       ? esc(`Apple 官方設計目標：${mdl.name.replace(/（.*）/, '')} 在 ${mdl.ratedCycles} 次完整充電循環時仍保有 80% 原始容量（理想條件）。目前 ${fmt(b.CycleCount)} 次，為目標的 ${fmt(b.CycleCount / mdl.ratedCycles * 100, 1)}%。`)
@@ -383,13 +513,16 @@
     $('importFile').addEventListener('change', (e) => importHistory(Array.from(e.target.files || [])));
     $('pasteBtn').addEventListener('click', pasteFromClipboard);
     $('clearBtn').addEventListener('click', () => {
-      if (!confirm('確定清除這台裝置上的全部歷史紀錄？建議先匯出備份。')) return;
-      saveHistory([]); renderHistory([]);
+      const cd = curDev(), all = loadHistory(), keep = all.filter(x => devOfSnap(x) !== cd);
+      const d = devList(all).find(x => x.key === cd);
+      if (!confirm(`確定清除「${d ? devLabel(d) : '目前裝置'}」的歷史紀錄？其他裝置的紀錄保留。建議先匯出備份。`)) return;
+      saveHistory(keep); renderDevices(); renderHistory(keep);
     });
   }
   // 歷史快照的健康度用「目前選的設計容量」重算，換型號時趨勢與比較才一致
-  function withDesign(h) {
-    const d = designCapacity();
+  function withDesign(hAll) {
+    const cd = curDev(), h = hAll.filter(x => devOfSnap(x) === cd);
+    const d = designCapacity(cd);
     if (!d) return h;
     const pct = v => (typeof v === 'number') ? v / d * 100 : null;
     return h.map(x => Object.assign({}, x, { design: d, healthRaw: pct(x.rawMax), healthNominal: pct(x.nominal), healthQmax: pct(x.qmax) }));
@@ -505,7 +638,7 @@
     const box = $('historyMsg'); box.innerHTML = '';
     const raw = loadHistory();
     if (!raw.length) { msg(box, 'warn', '沒有紀錄可以匯出。'); return; }
-    const h = withDesign(raw);
+    const h = withDesign(raw);      // CSV：目前選的裝置；JSON：全部裝置（含裝置代碼，可再匯入）
     const stamp = fmtDate(new Date());
     const file = kind === 'csv'
       ? new File([buildCsv(h)], `battery_history_${stamp}.csv`, { type: 'text/csv' })
@@ -534,15 +667,16 @@
       if (list) { for (const s of list) { if (s && typeof s.key === 'string') { h = P.mergeHistory(h, s); n++; } } }
       else rawItems.push({ name, text });
     }
-    if (n) { saveHistory(h); msg(box, 'ok', `JSON 紀錄讀入 ${n} 筆，歷史由 ${before} 筆變成 ${h.length} 筆（同一份檔案不重複）。`); }
+    if (n) { h = normalizeDevs(h); saveHistory(h); ensureDevModels(h); msg(box, 'ok', `JSON 紀錄讀入 ${n} 筆，歷史由 ${before} 筆變成 ${h.length} 筆（同一份檔案不重複）。`); }
     if (rawItems.length) ingest(rawItems, box);
-    renderHistory(loadHistory());
+    applyDeviceModelToUi(); showSource(); renderDevices(); renderHistory(loadHistory());
     $('importFile').value = '';
   }
 
   // ---------- 啟動 ----------
   $('ver').textContent = 'v' + APP_VERSION + '（解析器 v' + P.PARSER_VERSION + '）';
-  initModels(); initHistoryUi(); renderHistory(loadHistory());
+  ensureDevModels(loadHistory());
+  initModels(); initHistoryUi(); renderDevices(); renderHistory(loadHistory());
   $('file').addEventListener('change', (e) => onFiles(Array.from(e.target.files || [])));
   handleHash();
   window.addEventListener('hashchange', handleHash);
@@ -551,6 +685,7 @@
   }
   window.__bhp = {
     render: (t) => { const p = P.parse(t); if (p.ok) { current = p; render(p); } return p; }, buildCsv, decodeShortcutPayload, // 測試用
+    devices: () => devList(loadHistory()).map(d => ({ key: d.key, label: devLabel(d), count: d.snaps.length, model: devModel(d.key) })),
     // 電腦版用：一次送入多份文字，回傳每份結果 [{ name, ok, error }]
     ingestTexts: (items) => { const box = $('messages'); box.innerHTML = ''; const results = []; ingest(items.map(x => ({ name: String(x.name), text: x.text === null ? null : String(x.text) })), box, results); return results; },
     historyCount: () => loadHistory().length,

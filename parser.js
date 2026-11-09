@@ -16,7 +16,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  const PARSER_VERSION = '1.1';
+  const PARSER_VERSION = '1.2';
 
   // 電池主紀錄名稱（iOS 27.0 實測）；之後 Apple 改名時在這裡加候選名稱
   const BATTERY_RECORD_NAMES = ['BatteryConfigValueHistogramFinal_V2', 'BatteryConfigValueHistogramFinal'];
@@ -93,6 +93,8 @@
         bugType: header.bug_type || null,
         productSku: null,
         deviceCapacityGB: null,
+        ramGB: null,
+        ipadHint: null,       // metadata 的行動網路業者名稱含「iPad」時為 true（只有行動網路版 iPad 才有）；其他情況不確定，維持 null
       },
       battery: null,          // 電池欄位（去前綴、合併後）
       batteryRecordName: null,
@@ -111,9 +113,11 @@
     if (meta && meta._marker === '<metadata>') {
       result.meta.productSku = meta.productSku || null;
       result.meta.deviceCapacityGB = num(meta.deviceCapacity);
+      result.meta.ramGB = num(meta.dramSize);
+      if (/iPad/i.test(String(meta.homeCarrierName || ''))) result.meta.ipadHint = true;
     }
     if (!result.meta.osVersion || !/iPhone OS|iOS/.test(result.meta.osVersion)) {
-      result.warnings.push('檔頭沒有 iPhone OS 版本，可能不是 iPhone 的分析資料檔');
+      result.warnings.push('檔頭沒有 iPhone OS 版本，可能不是 iPhone／iPad 的分析資料檔');
     }
 
     const packRecords = [];
@@ -187,8 +191,13 @@
     const design = num(designCapacity);
     const pct = (v) => (design && num(v) !== null) ? (num(v) / design * 100) : null;
     const firstUse = epochToDate(b.DOFU);
+    // 實機發現：DOFU 都是 604800 秒（一週）的整數倍、落在週四 00:00 UTC，代表 Apple 只記到「哪一週」（實機：2025-12-09 啟用 → 記成 2025-12-04）
+    const dofuWeek = firstUse !== null && num(b.DOFU) % 604800 === 0;
+    const firstUseEnd = dofuWeek ? new Date(firstUse.getTime() + 6 * 86400000) : null;
     const ref = (parsed && parsed.meta && parsed.meta.fileTime) || epochToDate(b.UpdateTime);
-    const daysSinceFirstUse = (firstUse && ref) ? (ref - firstUse) / 86400000 : null;
+    const daysMax = (firstUse && ref) ? (ref - firstUse) / 86400000 : null;
+    const daysMin = (daysMax !== null && dofuWeek) ? Math.max(0, daysMax - 6) : daysMax;
+    const daysSinceFirstUse = daysMax === null ? null : (daysMax + daysMin) / 2;     // 以週為單位時取中間值
     const cycles = num(b.CycleCount);
     const opHours = num(b.TotalOperatingTime);
     const tMax = num(b.MaximumTemperature);
@@ -205,6 +214,10 @@
       healthFccMin: pct(b.MinimumFCC),
       lostRawMah: (design && num(b.AppleRawMaxCapacity) !== null) ? design - b.AppleRawMaxCapacity : null,
       firstUse,
+      firstUseEnd,                 // 以週為單位時的週末日（firstUse～firstUseEnd 之間某一天）
+      dofuWeek,
+      daysSinceMin: daysMin,
+      daysSinceMax: daysMax,
       lastUpdate: epochToDate(b.UpdateTime),
       daysSinceFirstUse,
       cyclesPerDay: (cycles !== null && daysSinceFirstUse > 0) ? cycles / daysSinceFirstUse : null,
@@ -277,7 +290,44 @@
       raw: Object.assign({}, b),
       usage: u,
       parserVersion: PARSER_VERSION,
+      // v1.3.6：裝置辨識（分析檔沒有型號代碼；以電池「首次使用日」DOFU 區分不同裝置，換電池後會視為新裝置）
+      dev: deviceKey(b),
+      devInfo: { firstUse: epochToDate(b.DOFU) ? epochToDate(b.DOFU).toISOString() : null, sku: parsed.meta.productSku || null,
+                 capacityGB: parsed.meta.deviceCapacityGB, ramGB: parsed.meta.ramGB, ipad: parsed.meta.ipadHint },
     };
+  }
+
+  // 裝置代碼：電池首次使用日（DOFU，秒級時間戳）；沒有時回傳 null
+  function deviceKey(b) {
+    const v = b ? num(b.DOFU) : null;
+    return v ? 'dofu:' + v : null;
+  }
+
+  // 由「標稱容量 ÷ 設計容量 四捨五入＝系統健康度」反推設計容量範圍，回傳 { lo, hi }（無法判斷時 null）
+  // 系統顯示 100% 時只知道上限（新電池標稱容量可能高於設計容量）
+  function designRange(snaps) {
+    let lo = 0, hi = Infinity, used = 0;
+    for (const s of snaps || []) {
+      const n = num(s && s.nominal), p = num(s && s.healthSystem);
+      if (n === null || p === null || p <= 0) continue;
+      used++;
+      if (p >= 100) { hi = Math.min(hi, n / 0.995); continue; }
+      lo = Math.max(lo, n / ((p + 0.5) / 100));
+      hi = Math.min(hi, n / ((p - 0.5) / 100));
+    }
+    return used && lo <= hi ? { lo, hi, used } : null;
+  }
+
+  // 依設計容量範圍與 iPad 線索挑出可能的型號；models 為型號表（id、group、design）
+  function guessModels(snaps, models, ipadHint) {
+    const r = designRange(snaps);
+    if (!r) return [];
+    const pick = (list, tol) => list.filter(m => m.design >= r.lo - tol(m) && m.design <= r.hi + tol(m));
+    let all = models || [];
+    if (ipadHint === true) all = all.filter(m => /^iPad/.test(m.group));
+    // 先找設計容量剛好落在範圍內的；都沒有時，才把推估值（conf＝est，可能偏差 1～2%）放寬 ±2% 再找
+    const exact = pick(all, () => 0.5);
+    return exact.length ? exact : pick(all, m => (m.conf === 'est' ? m.design * 0.02 : 0.5));
   }
 
   // 合併歷史紀錄：同 key 以新的取代，依檔案時間排序
@@ -318,5 +368,6 @@
   }
 
   return { PARSER_VERSION, BATTERY_RECORD_NAMES, parse, derive, summarizeUsage, snapshot, mergeHistory, linearRegression, movingAverage,
+           deviceKey, designRange, guessModels,
            _internal: { parseHeaderTime, stripPrefix, mergeFill, epochToDate } };
 });

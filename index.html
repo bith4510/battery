@@ -84,14 +84,18 @@ footer{color:var(--muted);font-size:12px;text-align:center;margin-top:20px}
 <main>
   <header>
     <h1>電池健康度 Plus</h1>
-    <p>讀取 iPhone「分析資料」檔，顯示比「設定」更詳細的電池數據。檔案只在這台裝置上解析，不會上傳。</p>
+    <p>讀取 iPhone／iPad「分析資料」檔，顯示比「設定」更詳細的電池數據。檔案只在這台裝置上解析，不會上傳。</p>
   </header>
 
   <section class="card" id="setup">
-    <h2>1. 選擇型號</h2>
+    <h2>1. 裝置與型號</h2>
+    <div class="row hidden" id="deviceRow">
+      <select id="device" aria-label="裝置"></select>
+    </div>
+    <p class="muted" id="deviceNote"></p>
     <div class="row">
       <select id="model" aria-label="型號"></select>
-      <input id="customDesign" type="number" inputmode="numeric" min="500" max="10000" placeholder="mAh" class="hidden" aria-label="自訂設計容量">
+      <input id="customDesign" type="number" inputmode="numeric" min="500" max="20000" placeholder="mAh" class="hidden" aria-label="自訂設計容量">
     </div>
     <p class="muted" id="modelSource" style="white-space:pre-line"></p>
     <h2 style="margin-top:14px">2. 選擇分析資料檔</h2>
@@ -104,7 +108,7 @@ footer{color:var(--muted);font-size:12px;text-align:center;margin-top:20px}
     <details>
       <summary>怎麼取得分析資料檔？</summary>
       <ol class="muted">
-        <li>設定 → 隱私權與安全性 → 分析與改進功能 → 開啟「分享 iPhone 分析」（第一次開要等約一天）。</li>
+        <li>設定 → 隱私權與安全性 → 分析與改進功能 → 開啟「分享 iPhone 分析」（iPad 為「分享 iPad 分析」）（第一次開要等約一天）。</li>
         <li>同一頁點「分析資料」，搜尋 <b>Analytics-</b>，點最新一份 <code>Analytics-年-月-日-…</code>。</li>
         <li>右上角分享 → 儲存到檔案。</li>
         <li>回到這裡按「選擇檔案」。一次選多天的檔案，就能直接看到趨勢。</li>
@@ -216,7 +220,7 @@ footer{color:var(--muted);font-size:12px;text-align:center;margin-top:20px}
     <div id="historyMsg"></div>
   </section>
 
-  <footer>電池健康度 Plus 網頁版 <span id="ver"></span>｜資料來源：iPhone 分析資料檔｜非 Apple 官方工具｜程式由 AI（Claude）產生，CC0 公有領域</footer>
+  <footer>電池健康度 Plus 網頁版 <span id="ver"></span>｜資料來源：iPhone／iPad 分析資料檔｜非 Apple 官方工具｜程式由 AI（Claude）產生，CC0 公有領域</footer>
 </main>
 <script src="parser.js"></script>
 <script src="models.js"></script>
