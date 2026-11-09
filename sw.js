@@ -4,7 +4,7 @@
  * 非 Apple 官方工具；數值僅供參考，不提供任何保證。
  */
 /* 離線快取：先用快取，背景更新；改版時調整 CACHE 名稱 */
-const CACHE = 'bhp-v1.3.8';
+const CACHE = 'bhp-v1.3.10';
 const FILES = ['./', 'index.html', 'parser.js', 'models.js', 'fields.js', 'app.js', 'manifest.webmanifest',
   'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-512-maskable.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });

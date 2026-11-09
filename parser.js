@@ -16,7 +16,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  const PARSER_VERSION = '1.2';
+  const PARSER_VERSION = '1.2.1';
 
   // 電池主紀錄名稱（iOS 27.0 實測）；之後 Apple 改名時在這裡加候選名稱
   const BATTERY_RECORD_NAMES = ['BatteryConfigValueHistogramFinal_V2', 'BatteryConfigValueHistogramFinal'];
@@ -191,12 +191,14 @@
     const design = num(designCapacity);
     const pct = (v) => (design && num(v) !== null) ? (num(v) / design * 100) : null;
     const firstUse = epochToDate(b.DOFU);
-    // 實機發現：DOFU 都是 604800 秒（一週）的整數倍、落在週四 00:00 UTC，代表 Apple 只記到「哪一週」（實機：2025-12-09 啟用 → 記成 2025-12-04）
+    // 實機發現：DOFU 都是 604800 秒（一週）的整數倍、落在週四 00:00 UTC，代表 Apple 只記到「哪一週」（實際啟用日會被記成該週的週四）
     const dofuWeek = firstUse !== null && num(b.DOFU) % 604800 === 0;
     const firstUseEnd = dofuWeek ? new Date(firstUse.getTime() + 6 * 86400000) : null;
     const ref = (parsed && parsed.meta && parsed.meta.fileTime) || epochToDate(b.UpdateTime);
     const daysMax = (firstUse && ref) ? (ref - firstUse) / 86400000 : null;
-    const daysMin = (daysMax !== null && dofuWeek) ? Math.max(0, daysMax - 6) : daysMax;
+    // 那一週是 [DOFU, DOFU+7 天)：最晚在第 7 天結束前啟用，所以已使用天數下限＝上限 − 7（v1.3.10 修正：原本減 6 少算 1 天）
+    // 檔案時間早於 DOFU（時鐘異常）時，下限不得大於上限
+    const daysMin = (daysMax !== null && dofuWeek) ? Math.min(daysMax, Math.max(0, daysMax - 7)) : daysMax;
     const daysSinceFirstUse = daysMax === null ? null : (daysMax + daysMin) / 2;     // 以週為單位時取中間值
     const cycles = num(b.CycleCount);
     const opHours = num(b.TotalOperatingTime);
@@ -319,15 +321,28 @@
   }
 
   // 依設計容量範圍與 iPad 線索挑出可能的型號；models 為型號表（id、group、design）
+  // v1.3.9：實機發現系統健康度（MaximumCapacityPercent）不會每天跟著標稱容量更新——
+  // 標稱容量 ÷ 設計容量已降到四捨五入少 1%，系統仍顯示原值好幾天，
+  // 所以各筆的範圍取交集會變成空集合。改成「每個型號算有幾筆對得上」，取對得上最多的型號（至少一半）。
+  // v1.3.10：系統顯示 100% 時只知道「標稱 ÷ 設計 ≥ 99.5%」，新電池可超過 100%，下限放寬到 110%（原本 100.5% 會把新電池判成較大容量的型號）
+  const NEW_BATTERY_MAX_RATIO = 1.10;   // 新電池標稱容量最多約為設計容量的 110%（推定上限，只用來縮小型號範圍）
   function guessModels(snaps, models, ipadHint) {
-    const r = designRange(snaps);
-    if (!r) return [];
-    const pick = (list, tol) => list.filter(m => m.design >= r.lo - tol(m) && m.design <= r.hi + tol(m));
+    const pts = (snaps || []).map(s => ({ n: num(s && s.nominal), p: num(s && s.healthSystem) })).filter(s => s.n !== null && s.p !== null && s.p > 0);
+    if (!pts.length) return [];
     let all = models || [];
     if (ipadHint === true) all = all.filter(m => /^iPad/.test(m.group));
-    // 先找設計容量剛好落在範圍內的；都沒有時，才把推估值（conf＝est，可能偏差 1～2%）放寬 ±2% 再找
-    const exact = pick(all, () => 0.5);
-    return exact.length ? exact : pick(all, m => (m.conf === 'est' ? m.design * 0.02 : 0.5));
+    const fits = (m, tolPct) => pts.filter(({ n, p }) => {
+      const lo = (p >= 100 ? n / NEW_BATTERY_MAX_RATIO : n / ((p + 0.5) / 100)) * (1 - tolPct), hi = p >= 100 ? n / 0.995 * (1 + tolPct) : n / ((p - 0.5) / 100) * (1 + tolPct);
+      return m.design >= lo - 0.5 && m.design <= hi + 0.5;
+    }).length;
+    const best = (tol) => {
+      const scored = all.map(m => ({ m, k: fits(m, tol(m)) }));
+      const top = Math.max(0, ...scored.map(x => x.k));
+      return top >= Math.ceil(pts.length / 2) ? scored.filter(x => x.k === top).map(x => x.m) : [];
+    };
+    // 先用精確範圍；都沒有時，才把推估值（conf＝est，可能偏差 1～2%）放寬 ±2% 再找
+    const exact = best(() => 0);
+    return exact.length ? exact : best(m => (m.conf === 'est' ? 0.02 : 0));
   }
 
   // 合併歷史紀錄：同 key 以新的取代，依檔案時間排序
@@ -342,20 +357,23 @@
    * 最小平方法線性回歸 y = a + b·x
    * b = Σ(x-x̄)(y-ȳ) / Σ(x-x̄)²，a = ȳ - b·x̄，R² = 1 - SSres/SStot
    * 少於 2 點或 x 全相同時回傳 null（斜率無定義）；y 全相同時 R² 定為 1（完全由直線解釋）
+   * v1.3.10：先減掉第一點當偏移再算，y 全相同時 Σ(y-ȳ)² 才會剛好是 0
+   *（原本 50.4 這類小數連續 7 筆，平均值有浮點誤差，R² 被算成 0；x 是毫秒時間戳時也減少相消誤差）
    */
   function linearRegression(pts) {
     const v = (pts || []).filter(p => num(p.x) !== null && num(p.y) !== null);
     const n = v.length;
     if (n < 2) return null;
+    const x0 = v[0].x, y0 = v[0].y;
     let sx = 0, sy = 0;
-    for (const p of v) { sx += p.x; sy += p.y; }
-    const mx = sx / n, my = sy / n;
+    for (const p of v) { sx += p.x - x0; sy += p.y - y0; }
+    const mx = sx / n, my = sy / n;              // 偏移後的平均
     let sxx = 0, sxy = 0, syy = 0;
-    for (const p of v) { const dx = p.x - mx, dy = p.y - my; sxx += dx * dx; sxy += dx * dy; syy += dy * dy; }
+    for (const p of v) { const dx = (p.x - x0) - mx, dy = (p.y - y0) - my; sxx += dx * dx; sxy += dx * dy; syy += dy * dy; }
     if (sxx === 0) return null;
-    const slope = sxy / sxx, intercept = my - slope * mx;
+    const slope = sxy / sxx, intercept = (my + y0) - slope * (mx + x0);
     let ssRes = 0;
-    for (const p of v) { const e = p.y - (intercept + slope * p.x); ssRes += e * e; }
+    for (const p of v) { const e = (p.y - y0) - (my + slope * ((p.x - x0) - mx)); ssRes += e * e; }
     const r2 = syy === 0 ? 1 : 1 - ssRes / syy;
     return { n, slope, intercept, r2, xMin: Math.min(...v.map(p => p.x)), xMax: Math.max(...v.map(p => p.x)) };
   }

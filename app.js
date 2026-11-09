@@ -6,7 +6,7 @@
 /* 電池健康度 Plus 網頁版 — 畫面邏輯 */
 (function () {
   'use strict';
-  const APP_VERSION = '1.3.8';
+  const APP_VERSION = '1.3.10';
   const NO_BATTERY_LIST_MAX = 5;   // 合併訊息最多列出幾個檔名
   const P = window.BatteryParser, M = window.BatteryModels, FD = window.BatteryFields;
   const LS_MODEL = 'bhp_model_v1', LS_CUSTOM = 'bhp_custom_design_v1', LS_HISTORY = 'bhp_history_v1';
@@ -60,6 +60,8 @@
   function fmtDateUTC(dt) { if (!dt) return '—'; const d = new Date(dt); if (isNaN(d)) return '—'; const p = n => String(n).padStart(2, '0'); return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`; }
   function fmtDateTime(dt) { if (!dt) return '—'; const d = new Date(dt); if (isNaN(d)) return '—'; const p = n => String(n).padStart(2, '0'); return `${fmtDate(d)} ${p(d.getHours())}:${p(d.getMinutes())}`; }
   function fmtH(sec) { if (sec === null || sec === undefined) return '—'; const h = sec / 3600; return h >= 1 ? fmt(h, 1) + ' 小時' : fmt(sec / 60, 0) + ' 分'; }
+  // 給 row2 的值用：數字照 fmt 格式化，字串不先跳脫（row2 會跳脫一次；fmt 跳脫後再跳脫會把 & 顯示成 &amp;）
+  function fmtT(v, d) { return (v === null || v === undefined || typeof v === 'number') ? fmt(v, d) : String(v); }
   function tag(level) { return level === 'guess' ? '<span class="tag guess">推定</span>' : level === 'unknown' ? '<span class="tag unknown">未知</span>' : ''; }
   function stat(k, v, s) { return `<div class="stat"><div class="k">${esc(k)}</div><div class="v">${v}</div>${s ? `<div class="s">${s}</div>` : ''}</div>`; }
   function healthColor(p) { if (p === null) return 'var(--muted)'; return p >= 90 ? 'var(--good)' : p >= 80 ? 'var(--warn)' : 'var(--bad)'; }
@@ -94,7 +96,7 @@
       setDevModel(curDev(), { model: sel.value, custom: $('customDesign').value, auto: false });   // 手動選的，記在目前裝置
       lsSet(LS_MODEL, sel.value);
       lsSet(LS_CUSTOM, $('customDesign').value);
-      if (current && devOfParsed(current) === curDev()) render(current);
+      if (current && devOfCurrent(current) === curDev()) render(current);
       renderDevices(); renderHistory(loadHistory());
     };
     sel.addEventListener('change', sync);
@@ -119,8 +121,16 @@
   const latestParsed = {};            // 這次開頁面讀過的各裝置最新一份（切換裝置時直接顯示詳細報告）
   function devOfSnap(x) { return (x && x.dev && x.dev !== UNKNOWN_DEV && x.dev) || (x && x.raw && P.deviceKey(x.raw)) || UNKNOWN_DEV; }   // 存成 unknown 的也會重新判斷
   function devOfParsed(p) { return (p && P.deviceKey(p.battery)) || UNKNOWN_DEV; }
+  // v1.3.10：分析檔本身沒有 DOFU 時，用歷史紀錄（已依裝置特徵歸類）裡同一份的裝置；h 省略時讀本機歷史
+  function snapKeyOf(p) { return ((p && p.meta && p.meta.fileTimeRaw) || '') + '|' + ((p && p.battery && p.battery.UpdateTime) || ''); }
+  function devOfCurrent(p, h) {
+    const d = devOfParsed(p);
+    if (d !== UNKNOWN_DEV) return d;
+    const k = snapKeyOf(p), x = (h || loadHistory()).find(s => s && s.key === k);
+    return x ? devOfSnap(x) : UNKNOWN_DEV;
+  }
   // 裝置特徵：電池製造週次、化學代碼（電池本身固定）＋地區碼、容量、記憶體（裝置固定）；用來把沒有首次使用日的紀錄歸回原裝置
-  // 實機發現：同一支 iPhone 有些日子的分析檔 DOFU 是 null（2026-10-25、10-27），其他欄位都相同
+  // 實機發現：同一支 iPhone 有些日子的分析檔 DOFU 是 null（只有 1 組電池紀錄的檔），其他欄位都相同
   const FP_KEYS = ['w', 'c', 'sku', 'cap', 'ram'];
   function fpOf(x) {
     const r = (x && x.raw) || {}, i = (x && x.devInfo) || {};
@@ -240,6 +250,7 @@
   // items：[{ name, text }]；回傳成功筆數
   function ingest(items, box, results) {
     let history = loadHistory(), latest = null, okCount = 0;
+    const okParsed = [];          // 裝置歸類要等全部讀完、正規化之後才確定（沒有 DOFU 的檔靠特徵比對）
     const report = (name, ok, error) => { if (results) results.push({ name, ok, error: error || '' }); };
     // 沒有電池紀錄的檔案（session 小檔、當天最新的檔）一次讀很多時會洗版：先收集，最後合併成一則
     const noBat = [];
@@ -251,8 +262,7 @@
       if (!parsed.ok) { msg(box, 'err', `${it.name}：${parsed.error}`); msg(box, 'warn', '診斷（不含個人資料）：' + diagnose(it.text)); report(it.name, false, parsed.error); continue; }
       okCount++; report(it.name, true, '');
       history = P.mergeHistory(history, P.snapshot(parsed, designCapacity(devOfParsed(parsed))));
-      const pd = devOfParsed(parsed), prev = latestParsed[pd];
-      if (!prev || (parsed.meta.fileTime && (!prev.meta.fileTime || parsed.meta.fileTime > prev.meta.fileTime))) latestParsed[pd] = parsed;
+      okParsed.push(parsed);
       // 用時間戳數值比較；沒有時間的檔案排最舊（v1.0 用字串比較，會把星期名稱拿來比，選錯檔）
       const tNew = parsed.meta.fileTime ? parsed.meta.fileTime.getTime() : -Infinity;
       const tOld = latest && latest.meta.fileTime ? latest.meta.fileTime.getTime() : -Infinity;
@@ -270,7 +280,11 @@
       history = normalizeDevs(history);
       if (!saveHistory(history)) msg(box, 'warn', '這個瀏覽器無法儲存紀錄（可能是私密瀏覽），趨勢圖只在這次有效。');
       ensureDevModels(history);
-      lsSet(LS_CURDEV, devOfParsed(latest));
+      for (const p of okParsed) {
+        const pd = devOfCurrent(p, history), prev = latestParsed[pd];
+        if (!prev || (p.meta.fileTime && (!prev.meta.fileTime || p.meta.fileTime > prev.meta.fileTime))) latestParsed[pd] = p;
+      }
+      lsSet(LS_CURDEV, devOfCurrent(latest, history));
       const nDev = devList(history).length;
       msg(box, 'ok', `已讀取 ${okCount} 份，歷史共 ${history.length} 筆` + (nDev > 1 ? `（${nDev} 台裝置）` : '') + `，顯示最新一份（${fmtDateTime(latest.meta.fileTime)}）。`);
       applyDeviceModelToUi(); showSource(); renderDevices();
@@ -331,7 +345,7 @@
     // 健康度
     const hs = (label, v, sub) => stat(label, `<span style="color:${healthColor(v)}">${fmt(v, 1)}${v === null ? '' : '%'}</span>`, sub);
     $('healthStats').innerHTML =
-      hs('系統顯示（iOS 設定）', d.healthSystem, '＝標稱容量 ÷ 設計容量，取整數') +
+      hs('系統顯示（iOS 設定）', d.healthSystem, '≈標稱容量 ÷ 設計容量取整數，但不會每天更新') +
       hs('標稱容量 ★ 看衰退用這個', d.healthNominal, `${fmt(b.NominalChargeCapacity)} ÷ ${fmt(d.design)} mAh；iOS 健康度的依據`) +
       hs('滿充容量 FCC（現在實際可用）', d.healthRaw, `${fmt(b.AppleRawMaxCapacity)} ÷ ${fmt(d.design)} mAh；隨溫度、負載跳動（coconutBattery 用這個）`) +
       hs('化學容量 Qmax（電芯本身）', d.healthQmax, `${fmt(b.QmaxCell0)} ÷ ${fmt(d.design)} mAh；不含內阻損失，偶爾才更新`);
@@ -344,7 +358,7 @@
     $('capGuide').innerHTML =
       '<b>這幾個容量怎麼看</b>' +
       '<ul>' +
-      `<li><b>看電池衰退、跟以前比：用「標稱容量」</b>（目前 ${fmt(b.NominalChargeCapacity)} mAh）。iOS「設定」的電池健康度就是它 ÷ 設計容量取整數（上面的一致性檢查可驗證），數值變化平穩，最適合畫趨勢。Apple 沒有公開它怎麼從 FCC 算出來。${tag('guess')}</li>` +
+      `<li><b>看電池衰退、跟以前比：用「標稱容量」</b>（目前 ${fmt(b.NominalChargeCapacity)} mAh）。iOS「設定」的電池健康度大致是它 ÷ 設計容量取整數，但 iOS 不會每天更新那個整數（實測標稱容量降了 1% 多，系統仍停在 99%），所以看細微衰退要看標稱容量本身。Apple 沒有公開它怎麼從 FCC 算出來。${tag('guess')}</li>` +
       `<li><b>現在充飽實際能用多少：看「滿充容量 FCC」</b>（目前 ${fmt(b.AppleRawMaxCapacity)} mAh）。電量計估算從充飽放到截止電壓能放出的電量，會隨溫度、放電電流、內阻變動，單次數字會跳，看趨勢要開移動平均。</li>` +
       `<li><b>電芯本身還能存多少：看「化學容量 Qmax」</b>（目前 ${fmt(b.QmaxCell0)} mAh）。極小電流放到底的總電量，不含內阻造成的電壓降損失，所以通常最大；只在手機靜置夠久時才重新量測（${lastQtext}），所以會一階一階變。</li>` +
       (gap !== null ? `<li><b>Qmax − FCC ＝ ${fmt(gap)} mAh</b>：這段主要是內阻造成、放電時用不到的部分。之後這個差距越來越大，代表內阻在上升（低溫、大電流時也會暫時變大）。</li>` : '') +
@@ -354,8 +368,13 @@
     let check = '';
     if (d.design && d.healthNominal !== null && d.healthSystem !== null) {
       const r = Math.round(d.healthNominal);
-      check = r === d.healthSystem ? `一致性檢查：標稱容量 ÷ 設計容量 = ${fmt(d.healthNominal, 2)}%，四捨五入 ${r}%，與系統顯示相同。`
-        : `一致性檢查：標稱容量 ÷ 設計容量 = ${fmt(d.healthNominal, 2)}%，四捨五入 ${r}%，與系統顯示 ${d.healthSystem}% 不同，請確認型號（實體 SIM／eSIM）是否選對。`;
+      // 實機：系統健康度不會每天跟著標稱容量更新，標稱容量下降時系統常停在舊值（高 1%）一段時間
+      check = (d.healthSystem >= 100 && r >= 100)
+        ? `一致性檢查：標稱容量 ÷ 設計容量 = ${fmt(d.healthNominal, 2)}%，系統最高只顯示 100%，新電池超過 100% 屬正常，與系統一致。`
+        : r === d.healthSystem ? `一致性檢查：標稱容量 ÷ 設計容量 = ${fmt(d.healthNominal, 2)}%，四捨五入 ${r}%，與系統顯示相同。`
+        : (d.healthSystem - r === 1)
+          ? `一致性檢查：標稱容量 ÷ 設計容量 = ${fmt(d.healthNominal, 2)}%，四捨五入 ${r}%，系統仍顯示 ${d.healthSystem}%。iOS 的健康度不是每天跟著標稱容量更新（實測會停在舊值一段時間），差 1% 屬正常；長期都對不上才需要檢查型號。`
+          : `一致性檢查：標稱容量 ÷ 設計容量 = ${fmt(d.healthNominal, 2)}%，四捨五入 ${r}%，與系統顯示 ${d.healthSystem}% 差 ${Math.abs(d.healthSystem - r)}%，請確認型號（實體 SIM／eSIM）是否選對。`;
     }
     $('healthNote').textContent = d.design ? `設計容量 ${fmt(d.design)} mAh。設計容量是廠商標示的額定值（IEC 61960 的額定容量是保證下限），新電池實際容量常略高，所以超過 100% 屬正常；百分比只代表與額定值的比例。${check}` : '尚未設定設計容量，百分比無法計算。';
     const capMax = Math.max(d.design || 0, b.MaximumQmax || 0, b.MaximumFCC || 0, 1);
@@ -383,10 +402,10 @@
       ['設計容量（依型號）', d.design, '', 'known'],
       ['滿充容量 FCC', b.AppleRawMaxCapacity, 'AppleRawMaxCapacity', 'known'],
       ['標稱容量（系統健康度依此計算）', b.NominalChargeCapacity, 'NominalChargeCapacity', 'known'],
-      ['標稱滿充容量 最大／最小', `${fmt(b.NCCMax)}／${fmt(b.NCCMin)}`, 'NCCMax／NCCMin', 'known'],
-      ['滿充容量 FCC 最大／最小', `${fmt(b.MaximumFCC)}／${fmt(b.MinimumFCC)}`, `差 ${fmt(d.fccSpread)} mAh`, 'known'],
+      ['標稱滿充容量 最大／最小', `${fmtT(b.NCCMax)}／${fmtT(b.NCCMin)}`, 'NCCMax／NCCMin', 'known'],
+      ['滿充容量 FCC 最大／最小', `${fmtT(b.MaximumFCC)}／${fmtT(b.MinimumFCC)}`, `差 ${fmtT(d.fccSpread)} mAh`, 'known'],
       ['化學容量 Qmax（電芯 0）', b.QmaxCell0, 'QmaxCell0', 'known'],
-      ['化學容量 Qmax 最大／最小', `${fmt(b.MaximumQmax)}／${fmt(b.MinimumQmax)}`, 'MaximumQmax／MinimumQmax', 'known'],
+      ['化學容量 Qmax 最大／最小', `${fmtT(b.MaximumQmax)}／${fmtT(b.MinimumQmax)}`, 'MaximumQmax／MinimumQmax', 'known'],
       ['FCC 與設計容量相差', d.lostRawMah, '正數＝少於設計值、負數＝多於設計值', 'known'],
     ];
     $('capTable').innerHTML = '<tr><th>項目</th><th class="n">mAh</th></tr>' + capRows.map(r => row2(r[0], typeof r[1] === 'string' ? r[1] : fmt(r[1]), esc(r[2]), tag(r[3]))).join('');
@@ -419,8 +438,8 @@
       ['實際充電中', fmtH(u.totalSec ? u.chargingSec : null), '裝置狀態統計'],
       ['充電（行動網路模組統計）', fmtH(w.chargingSec), ''],
       ['低耗電模式', fmtH(w.lowPowerModeSec), '行動網路模組統計'],
-      ['未接電時消耗能量', u.totalSec ? fmt(u.energyUnplugged) : '—', '原始值，Apple 未公開單位，只適合跟自己其他天比較'],
-      ['其中螢幕亮時', u.totalSec ? fmt(u.energyScreenOnUnplugged) : '—', '原始值，Apple 未公開單位'],
+      ['未接電時消耗能量', u.totalSec ? fmtT(u.energyUnplugged) : '—', '原始值，Apple 未公開單位，只適合跟自己其他天比較'],
+      ['其中螢幕亮時', u.totalSec ? fmtT(u.energyScreenOnUnplugged) : '—', '原始值，Apple 未公開單位'],
     ];
     $('usageTable').innerHTML = '<tr><th>項目</th><th class="n">數值</th></tr>' + usageRows.map(r => row2(r[0], r[1], esc(r[2]) + (/推定/.test(r[2]) ? tag('guess') : ''))).join('');
 
@@ -433,11 +452,12 @@
       stat('慢速充電原因', p.slowChargingReason === null ? '—' : String(p.slowChargingReason), p.slowChargingReason === 0 ? '0＝推定為無' + tag('guess') : '代碼意義未知');
     const chargeRows = [
       ['插電但閒置（未充電）', fmtH(j.idleSec), '最佳化充電統計'],
-      ['可延後充電的時間（實際／預估）', `${fmtH(j.actualUsableSec)}／${fmtH(j.estimatedUsableSec)}`, ''],
-      ['沒充滿就拔掉（可避免／不可避免）', `${fmt(j.underChargedAvoidable)}／${fmt(j.underChargedUnavoidable)} 次`, ''],
-      ['高電量持續（最近一次）', b.KioskModeLastHighSocHours !== undefined ? fmt(b.KioskModeLastHighSocHours) + ' 小時' : '—', 'KioskModeLastHighSocHours'],
-      ['高電量時間分布（各區間原始值）', p.highSocBins.map(x => fmt(x.value)).join('、') || '—', 'BatteryTimeAtHighSocLast，區間定義未知'],
-      ['低電壓停留（各區間原始值）', p.lowVoltageBins.length ? (p.lowVoltageBins.every(x => !x.value) ? `全部 0（${p.lowVoltageBins.length} 區間）` : p.lowVoltageBins.map(x => fmt(x.value)).join('、')) : '—', '全 0 代表沒有長時間低電壓'],
+      ['可延後充電的時間（實際／預估）', `${fmtH(j.actualUsableSec)}／${fmtH(j.estimatedUsableSec)}`,
+        (typeof j.actualUsableSec === 'number' && j.actualUsableSec < 0) ? '原始值為負數，推定是實際可延後的時間比預估短（例如提早拔掉）' + tag('guess') : ''],
+      ['沒充滿就拔掉（可避免／不可避免）', `${fmtT(j.underChargedAvoidable)}／${fmtT(j.underChargedUnavoidable)} 次`, ''],
+      ['高電量持續（最近一次）', b.KioskModeLastHighSocHours !== undefined ? fmtT(b.KioskModeLastHighSocHours) + ' 小時' : '—', 'KioskModeLastHighSocHours'],
+      ['高電量時間分布（各區間原始值）', p.highSocBins.map(x => fmtT(x.value)).join('、') || '—', 'BatteryTimeAtHighSocLast，區間定義未知'],
+      ['低電壓停留（各區間原始值）', p.lowVoltageBins.length ? (p.lowVoltageBins.every(x => !x.value) ? `全部 0（${p.lowVoltageBins.length} 區間）` : p.lowVoltageBins.map(x => fmtT(x.value)).join('、')) : '—', '全 0 代表沒有長時間低電壓'],
     ];
     $('chargeTable').innerHTML = '<tr><th>項目</th><th class="n">數值</th></tr>' + chargeRows.map(r => row2(r[0], r[1], esc(r[2]))).join('');
 
@@ -448,10 +468,10 @@
     // 狀態
     const st = [
       ['電池序號', d.originalBatteryHint, 'BatterySerialChanged'],
-      ['非預期關機次數', fmt(b.LifetimeUPOCount), 'LifetimeUPOCount' + tag('guess')],
-      ['電量計重置（總計／軟體／硬體）', `${fmt(b.ResetCnt)}／${fmt(b.ResetDataSoftware)}／${fmt(b.ResetDataHardware)}`, ''],
-      ['電量計韌體版本', fmt(b.GasGaugeFirmwareVersion), ''],
-      ['製造週次（原始值）', fmt(b.WeekMfd), '編碼未知' + tag('unknown')],
+      ['非預期關機次數', fmtT(b.LifetimeUPOCount), 'LifetimeUPOCount' + tag('guess')],
+      ['電量計重置（總計／軟體／硬體）', `${fmtT(b.ResetCnt)}／${fmtT(b.ResetDataSoftware)}／${fmtT(b.ResetDataHardware)}`, ''],
+      ['電量計韌體版本', fmtT(b.GasGaugeFirmwareVersion), ''],
+      ['製造週次（原始值）', fmtT(b.WeekMfd), '編碼未知' + tag('unknown')],
       ['電池資料更新時間', fmtDateTime(d.lastUpdate), 'UpdateTime'],
       ['分析檔時間', fmtDateTime(p.meta.fileTime), ''],
       ['iOS 版本', p.meta.osVersion || '—', ''],
@@ -528,8 +548,13 @@
     return h.map(x => Object.assign({}, x, { design: d, healthRaw: pct(x.rawMax), healthNominal: pct(x.nominal), healthQmax: pct(x.qmax) }));
   }
   // 依目前設定取出 { x, y, t } 點；x＝距第一筆的天數或循環次數
+  // 電池紀錄的更新時間（key 的後半）；實機 11-06 與 11-07 兩份檔的電池數值完全相同（UpdateTime 一樣），只有使用量不同
+  const USAGE_KEYS = new Set(['screenOnH', 'chargingH']);
+  function batteryUpdateOf(x) { const k = String((x && x.key) || ''); const i = k.lastIndexOf('|'); return i >= 0 ? k.slice(i + 1) : ''; }
   function seriesOf(h, key, axis) {
-    const valid = h.filter(x => typeof x[key] === 'number' && x.fileTime && !isNaN(Date.parse(x.fileTime)));
+    let prevUpd = null;
+    const fresh = USAGE_KEYS.has(key) ? h : h.filter(x => { const u = batteryUpdateOf(x); const keep = !u || u !== prevUpd; prevUpd = u; return keep; });
+    const valid = fresh.filter(x => typeof x[key] === 'number' && x.fileTime && !isNaN(Date.parse(x.fileTime)));
     if (!valid.length) return [];
     const t0 = Date.parse(valid[0].fileTime);
     return valid.map(x => ({ t: x.fileTime, y: x[key], x: axis === 'cycle' ? x.cycle : (Date.parse(x.fileTime) - t0) / DAY_MS }))
@@ -656,18 +681,24 @@
   async function importHistory(files) {
     const box = $('historyMsg'); box.innerHTML = '';
     if (!files.length) return;
-    let h = loadHistory(), n = 0, before = h.length;
-    const rawItems = [];
+    const rawItems = [], snaps = [];      // v1.3.10：先全部讀完，最後才讀歷史合併（讀大檔期間另外讀入的紀錄不會被蓋掉）
     for (const f of files) {
       if (f.size > MAX_FILE_BYTES) { msg(box, 'err', `${f.name}：檔案太大`); continue; }
       const { name, text } = await readFile(f);
       if (text === null) { msg(box, 'err', `${name}：讀取失敗`); continue; }
       let data = null; try { data = JSON.parse(text); } catch (e) { data = null; }
       const list = Array.isArray(data) ? data : (data && Array.isArray(data.history) ? data.history : null);
-      if (list) { for (const s of list) { if (s && typeof s.key === 'string') { h = P.mergeHistory(h, s); n++; } } }
+      if (list) { for (const s of list) { if (s && typeof s.key === 'string') snaps.push(s); } }
       else rawItems.push({ name, text });
     }
-    if (n) { h = normalizeDevs(h); saveHistory(h); ensureDevModels(h); msg(box, 'ok', `JSON 紀錄讀入 ${n} 筆，歷史由 ${before} 筆變成 ${h.length} 筆（同一份檔案不重複）。`); }
+    const n = snaps.length;
+    if (n) {
+      let h = loadHistory(); const before = h.length;
+      for (const s of snaps) h = P.mergeHistory(h, s);
+      h = normalizeDevs(h); ensureDevModels(h);
+      if (saveHistory(h)) msg(box, 'ok', `JSON 紀錄讀入 ${n} 筆，歷史由 ${before} 筆變成 ${h.length} 筆（同一份檔案不重複）。`);
+      else msg(box, 'err', `JSON 紀錄讀到 ${n} 筆，但這個瀏覽器無法儲存（可能是私密瀏覽或空間已滿），沒有存進歷史。`);
+    }
     if (rawItems.length) ingest(rawItems, box);
     applyDeviceModelToUi(); showSource(); renderDevices(); renderHistory(loadHistory());
     $('importFile').value = '';
